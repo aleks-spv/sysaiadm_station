@@ -1,0 +1,23 @@
+# >>> oco
+.oco/
+.omo/
+.codegraph/
+.opencode/
+.claude/
+.cursor/
+.serena/
+.aider*
+.worktrees/
+AGENTS.md
+CLAUDE.md
+.env
+.env.*
+!.env.example
+# <<< oco
+
+node_modules
+dist
+data/
+*.sqlite*
+tests/fixtures/keys/
+
