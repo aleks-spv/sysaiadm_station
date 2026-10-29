@@ -92,5 +92,15 @@ Runtime (что pending-запрос появляется в `/api/session/{id}/
 Проверено: `packages/plugin` (реальный репо, после правки `exports`): `loading plugin` = 1, тесты и typecheck зелёные. Форма `{ id, async setup(ctx) }` из `@opencode/plugin` совпадает с доком.
 Статус: подтверждено. Для продакшена в контейнере `PLUGIN_PATH` должен быть **каталогом** (`/app/packages/plugin`), а не `dist/index.js`.
 
-### Не проверено в этом раунде
-POLICY, BIN, INSTALL: не выполнялось.
+### BIN
+Команда: `command -v opencode` → `readlink -f`.
+Результат: нативный ELF-бинарь `…/@opencode/cli/bin/opencode.exe` (~246 MB), не node-скрипт. Node в рантайм-образ не нужен.
+Статус: подтверждено.
+
+### INSTALL
+Образ: стейдж `node:22-slim` с `npm install -g @opencode/cli@2.2.0`, в рантайм копируется только `/usr/local/lib/node_modules/@opencode/cli/bin/opencode.exe` в `/usr/local/bin/opencode`. Обе базы debian, glibc совпадает.
+Статус: запасной вариант: образ не собирался (D1). Проверка `docker compose run … opencode --version` — владелец (П1).
+
+### POLICY
+Не проверено: применение `policies` из `<infra>/opencode.json` к сессии в подкаталоге не запускалось (нужна сессия с моделью для `tool.use`).
+Статус: не подтверждено.
