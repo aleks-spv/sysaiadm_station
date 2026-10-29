@@ -72,7 +72,18 @@ Runtime (что pending-запрос появляется в `/api/session/{id}/
 - `GET /api/config` видит `plugins` из `<infra>/opencode.json` (конфиг парсится);
 - `GET /api/plugin` → `data: []` во всех вариантах: `package` = путь к файлу `dist/index.js`; `package` = каталог с `package.json` (`main: index.js`);
 - в `serve.log` с `--log-level debug` нет строк про плагин и нет ошибок загрузки.
-Статус: не подтверждено. Загрузка плагина не происходит, причина не найдена. Нужно выяснить, как 2.2.0 грузит `plugins` (npm-пакет по имени, `node_modules`, или другой формат записи), либо использовать `Plugin.define` из effect-билда.
+Документация (`opencode.ai/v2/docs/plugins`, `/v2/docs/build/plugins`):
+- локальный путь в `plugins` должен быть **каталогом**; одиночный файл пропускается;
+- форма `{ id, async setup(ctx) }` из `@opencode/plugin` — та же, что в примере доки, A2 по форме закрыт;
+- без `exports` в каталоге ищется `server`/`index` в корне.
+
+Проверено маркер-файлом (тестовый плагин пишет `MARKER` в `setup`), `opencode serve` + сессия в `location`:
+- `plugins: ["file://<dir>"]`, каталог с `package.json` (`exports`) → маркера нет;
+- `plugins: [{package: "<dir>"}]` без `exports` → маркера нет;
+- авто-обнаружение `.opencode/plugins/probe.js` без `plugins` → маркера нет;
+- то же после `git init` каталога проекта → маркера нет (projectID стал `global`).
+- `opencode plugin list` (и с `--builtin`) → «No plugins found».
+Статус: не подтверждено. `setup` не вызывается в проверенных сценариях. Гипотеза: плагины стартуют при первом запросе к модели (нужен провайдер и ключ, которых в спайке нет). Не подтверждена.
 
 ### Не проверено в этом раунде
 POLICY, BIN, INSTALL: не выполнялось.
