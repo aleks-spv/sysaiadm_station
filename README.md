@@ -9,18 +9,18 @@
                      │
                      ▼
                    sysadm (Bun + Hono): SQLite, зашифрованные креды, инвентарь, SSH
-                     │  REST к opencode (внутренняя сеть)
+                     │  REST к opencode на 127.0.0.1 (opencode запущен sysadm как дочерний процесс)
                      ▼
-                   opencode serve (без портов наружу) + плагин sysadm: инструмент remote_exec
-                     │  POST http://sysadm:3001/internal/* (Bearer SYSADM_INTERNAL_TOKEN)
+                   opencode serve (127.0.0.1) + плагин sysadm: инструмент remote_exec
+                     │  POST http://127.0.0.1:3001/internal/* (Bearer, токен генерируется при каждом старте)
                      ▼
                    sysadm выполняет команду по SSH ──▶ [бастион(ы)] ──▶ хост
 ```
 
 Инварианты:
-- Ключи и пароли не попадают в контейнер opencode и в контекст модели. SSH и расшифровка работают только в процессе sysadm.
+- Ключи и пароли не попадают в процесс opencode и в контекст модели. SSH и расшифровка работают только в процессе sysadm.
 - Модель не выбирает хост и маршрут. Плагин передаёт `sessionID` и команду, узел берётся из таблицы задач.
-- У агента нет других инструментов, кроме `remote_exec`, `skill`, `question`, `read`, `glob`, `grep`. Shell, webfetch и правка файлов запрещены политикой.
+- У агента нет других инструментов, кроме `remote_exec`, `skill`, `question`. Shell, webfetch, правка и чтение файлов запрещены политикой.
 - Команды проходят проверку guard в sysadm: `deny` блокирует, `dangerous` требует отдельного подтверждения. Regex-проверка best-effort и не даёт гарантии.
 - Каждое действие пишется в аудит.
 
@@ -28,7 +28,7 @@
 
 ```sh
 cp .env.example .env
-# заполните значения: SYSADM_MASTER_KEY, SYSADM_INTERNAL_TOKEN, OPENCODE_SERVER_PASSWORD
+# заполните SYSADM_MASTER_KEY; внутренний токен и пароль opencode генерируются при каждом старте
 docker compose up -d
 ```
 
@@ -39,6 +39,10 @@ docker compose up -d
 1. Откройте `https://<SYSADM_DOMAIN>` (по умолчанию `https://localhost`). При `SYSADM_TLS=internal` браузер покажет предупреждение: корневой сертификат Caddy выгружается командой `docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt .`.
 2. Установите пароль администратора и отсканируйте otpauth-ссылку в приложении TOTP.
 3. Войдите: пароль и 6-значный код.
+
+## API-токены
+
+Внешние клиенты (мобильное приложение, скрипты, другие агенты) ходят в `/api/*` с заголовком `Authorization: Bearer sat_…`. Токены создаются и отзываются только в «Настройки → API-токены» под сессией администратора; у каждого токена свои scope'ы и срок. Полное описание — в [docs/api.md](docs/api.md). MCP-сервера нет.
 
 ## Провайдер модели
 
@@ -104,7 +108,7 @@ docker compose up -d
 
 ## TLS
 
-Caddy терминирует TLS. Домен и режим задаются в `.env`: `SYSADM_DOMAIN`, `SYSADM_TLS` (`internal` для самоподписанного CA Caddy, либо ваш сертификат). Внутренние сервисы (opencode, порт 3001) наружу не проксируются.
+Caddy терминирует TLS. Домен и режим задаются в `.env`: `SYSADM_DOMAIN`, `SYSADM_TLS` (`internal` для самоподписанного CA Caddy, либо ваш сертификат). opencode и внутренний API (127.0.0.1:3001) работают внутри процесса sysadm и наружу не проксируются.
 
 ## Разработка
 
