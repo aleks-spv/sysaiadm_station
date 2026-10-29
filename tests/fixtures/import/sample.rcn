@@ -1,0 +1,43 @@
+{
+  "version": 3,
+  "groups": [
+    { "id": "g-company", "name": "Компания", "parent_id": null },
+    { "id": "g-pve01", "name": "pve-01", "parent_id": "g-company" }
+  ],
+  "connections": [
+    {
+      "id": "c-bastion",
+      "name": "bastion",
+      "host": "host-a",
+      "port": 22,
+      "username": "ops",
+      "group_id": "g-company",
+      "protocol_config": { "type": "Ssh" }
+    },
+    {
+      "id": "c-vm01",
+      "name": "vm-01",
+      "host": "host-b",
+      "port": 22,
+      "username": "deploy",
+      "group_id": "g-pve01",
+      "protocol_config": { "type": "Ssh", "jump_host_id": "c-bastion" }
+    },
+    {
+      "id": "c-win01",
+      "name": "win-01",
+      "host": "win-01.example.test",
+      "port": 3389,
+      "group_id": "g-pve01",
+      "protocol_config": { "type": "Rdp" }
+    },
+    {
+      "id": "c-vnc01",
+      "name": "vnc-01",
+      "host": "vnc.example.test",
+      "port": 5900,
+      "group_id": "g-pve01",
+      "protocol_config": { "type": "Vnc" }
+    }
+  ]
+}
