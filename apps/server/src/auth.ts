@@ -5,6 +5,7 @@ import { getCookie, setCookie } from "hono/cookie";
 import { createMiddleware } from "hono/factory";
 import * as OTPAuth from "otpauth";
 import { audit } from "./guard";
+import { verifyToken, type Scope } from "./tokens";
 import { open, seal } from "./vault";
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -124,16 +125,103 @@ export function createAuth({ db, masterKey, now = Date.now }: AuthDeps) {
 export type Auth = ReturnType<typeof createAuth>;
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const BEARER_MAX_FAILS = 20;
 
-// Requires a valid session cookie. Mutating methods also need X-Requested-With (CSRF guard for a cookie API).
-export const requireAuth = (auth: Auth) =>
-  createMiddleware(async (c, next) => {
+export interface RouteScope {
+  method: string;
+  pattern: string;
+  scope: Scope;
+}
+
+// Deny by default: a Bearer request to a path not listed here gets 403.
+export const ROUTE_SCOPES: RouteScope[] = [
+  { method: "GET", pattern: "/api/tree", scope: "read" },
+  { method: "GET", pattern: "/api/nodes/:id", scope: "read" },
+  { method: "GET", pattern: "/api/skills", scope: "read" },
+  { method: "GET", pattern: "/api/tasks", scope: "read" },
+  { method: "GET", pattern: "/api/tasks/:id", scope: "read" },
+  { method: "GET", pattern: "/api/tasks/:id/permissions", scope: "read" },
+  { method: "GET", pattern: "/api/audit", scope: "read" },
+  { method: "GET", pattern: "/api/events", scope: "read" },
+  { method: "GET", pattern: "/api/credentials", scope: "read" },
+  { method: "GET", pattern: "/api/settings/providers", scope: "read" },
+  { method: "GET", pattern: "/api/settings/models", scope: "read" },
+  { method: "GET", pattern: "/api/system/health", scope: "read" },
+  { method: "POST", pattern: "/api/nodes/:id/tasks", scope: "tasks" },
+  { method: "POST", pattern: "/api/tasks/:id/prompt", scope: "tasks" },
+  { method: "POST", pattern: "/api/tasks/:id/stop", scope: "tasks" },
+  { method: "POST", pattern: "/api/tasks/:id/permissions/:requestID", scope: "approve" },
+  { method: "GET", pattern: "/api/system/logs", scope: "logs" },
+  { method: "POST", pattern: "/api/nodes", scope: "admin" },
+  { method: "PATCH", pattern: "/api/nodes/:id", scope: "admin" },
+  { method: "DELETE", pattern: "/api/nodes/:id", scope: "admin" },
+  { method: "POST", pattern: "/api/nodes/:id/move", scope: "admin" },
+  { method: "POST", pattern: "/api/nodes/:id/reset-hostkey", scope: "admin" },
+  { method: "PUT", pattern: "/api/nodes/:id/skills", scope: "admin" },
+  { method: "POST", pattern: "/api/skills", scope: "admin" },
+  { method: "PUT", pattern: "/api/skills/:id", scope: "admin" },
+  { method: "DELETE", pattern: "/api/skills/:id", scope: "admin" },
+  { method: "POST", pattern: "/api/credentials", scope: "admin" },
+  { method: "PUT", pattern: "/api/credentials/:id", scope: "admin" },
+  { method: "DELETE", pattern: "/api/credentials/:id", scope: "admin" },
+  { method: "POST", pattern: "/api/import/preview", scope: "admin" },
+  { method: "POST", pattern: "/api/import/apply", scope: "admin" },
+  { method: "POST", pattern: "/api/settings/providers/:id/key", scope: "admin" },
+  { method: "POST", pattern: "/api/system/opencode/restart", scope: "admin" },
+];
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const compiledScopes = ROUTE_SCOPES.map((r) => ({
+  method: r.method,
+  scope: r.scope,
+  re: new RegExp(`^${r.pattern.split(/:[A-Za-z]+/).map(escapeRe).join("[^/]+")}$`),
+}));
+
+// Scope a Bearer token needs for this request, or null when the route is not in the map.
+export function matchRouteScope(method: string, path: string): Scope | null {
+  return compiledScopes.find((r) => r.method === method && r.re.test(path))?.scope ?? null;
+}
+
+declare module "hono" {
+  interface ContextVariableMap {
+    // Who the request acts as: "admin" (cookie) or "token:<name>" (Bearer). Audit uses it.
+    actor: string;
+    scopes: Scope[] | "*";
+  }
+}
+
+// A Bearer header bypasses the cookie entirely. Cookie requests keep the session check and the CSRF header.
+export const requireAuth = (auth: Auth, db: Database) => {
+  const bearerFails = new Map<string, number[]>();
+  return createMiddleware(async (c, next) => {
+    const header = c.req.header("authorization");
+    if (header !== undefined) {
+      const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+      const now = Date.now();
+      const recent = (bearerFails.get(ip) ?? []).filter((t) => t > now - RATE_WINDOW_MS);
+      bearerFails.set(ip, recent);
+      if (recent.length >= BEARER_MAX_FAILS) return c.json({ error: "too many attempts" }, 429);
+      const raw = header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
+      const token = raw ? verifyToken(db, raw, now) : null;
+      if (!token) {
+        bearerFails.set(ip, [...recent, now]);
+        return c.json({ error: "unauthorized" }, 401);
+      }
+      const needed = c.req.path.startsWith("/api/tokens") ? null : matchRouteScope(c.req.method, c.req.path);
+      if (needed === null || !token.scopes.includes(needed)) return c.json({ error: "forbidden" }, 403);
+      c.set("actor", `token:${token.name}`);
+      c.set("scopes", token.scopes);
+      return next();
+    }
     if (!auth.validate(getCookie(c, COOKIE))) return c.json({ error: "unauthorized" }, 401);
     if (MUTATING.has(c.req.method) && c.req.header("x-requested-with") !== "sysadm") {
       return c.json({ error: "csrf header missing" }, 403);
     }
+    c.set("actor", "admin");
+    c.set("scopes", "*");
     await next();
   });
+};
 
 export function authRoutes(auth: Auth) {
   const app = new Hono();

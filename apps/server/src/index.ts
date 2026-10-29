@@ -127,9 +127,10 @@ export async function buildApp(config: Config, options: { background: boolean })
   app.get("/api/health", (c) => c.json({ ok: true }));
   app.route("/api/auth", authRoutes(auth));
 
+  const guard = requireAuth(auth, db);
   app.use("/api/*", async (c, next) => {
     if (c.req.path.startsWith("/api/auth/") || c.req.path === "/api/health") return next();
-    return requireAuth(auth)(c, next);
+    return guard(c, next);
   });
   app.route("/", inventoryRoutes({ ...taskDeps, bus }));
   app.route("/", credentialsRoutes(db, config.masterKey));

@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import * as OTPAuth from "otpauth";
 import { openDb } from "./db";
-import { authRoutes, createAuth, requireAuth } from "./auth";
+import { authRoutes, createAuth, matchRouteScope, requireAuth } from "./auth";
+import { createToken, revokeToken } from "./tokens";
 
 const PASSWORD = "correct-horse-battery";
 const HOUR = 60 * 60 * 1000;
@@ -27,7 +28,7 @@ function setupApp() {
   const auth = createAuth({ db, masterKey: randomBytes(32), now: () => clock });
   const app = new Hono();
   app.route("/api/auth", authRoutes(auth));
-  app.post("/api/probe", requireAuth(auth), (c) => c.text("ok"));
+  app.post("/api/probe", requireAuth(auth, db), (c) => c.text("ok"));
   return { app, auth, db };
 }
 
@@ -119,5 +120,86 @@ describe("auth", () => {
     await setupAndGetSecret(app);
     const after = (await (await app.request("/api/auth/status")).json()) as { setup: boolean };
     expect(after.setup).toBe(true);
+  });
+});
+
+function bearerApp() {
+  const db = openDb(join(dir, "bearer.sqlite"));
+  const auth = createAuth({ db, masterKey: randomBytes(32), now: () => clock });
+  const app = new Hono();
+  app.route("/api/auth", authRoutes(auth));
+  app.use("/api/*", requireAuth(auth, db));
+  app.get("/api/tree", (c) => c.text("ok"));
+  app.get("/api/nodes/:id", (c) => c.text("ok"));
+  app.post("/api/nodes", (c) => c.text("ok"));
+  app.post("/api/nodes/:id/tasks", (c) => c.text("ok"));
+  app.get("/api/tokens", (c) => c.text("ok"));
+  app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
+  return { app, db };
+}
+
+describe("bearer tokens", () => {
+  // Tokens use the real clock: the middleware checks expiry against Date.now().
+  const bearer = (raw: string) => ({ authorization: `Bearer ${raw}` });
+
+  test("read token: GET tree is 200, POST nodes is 403", async () => {
+    const { app, db } = bearerApp();
+    const { token } = createToken(db, { name: "ro", scopes: ["read"] });
+    expect((await app.request("/api/tree", { headers: bearer(token) })).status).toBe(200);
+    expect((await app.request("/api/nodes", { method: "POST", headers: bearer(token) })).status).toBe(403);
+  });
+
+  test("admin token mutates without X-Requested-With and actor is token:<name>", async () => {
+    const { app, db } = bearerApp();
+    const { token } = createToken(db, { name: "robot", scopes: ["admin"] });
+    expect((await app.request("/api/nodes", { method: "POST", headers: bearer(token) })).status).toBe(200);
+  });
+
+  test("tasks scope reaches the handler on POST /api/nodes/:id/tasks", async () => {
+    const { app, db } = bearerApp();
+    const { token } = createToken(db, { name: "t", scopes: ["tasks"] });
+    expect((await app.request("/api/nodes/x/tasks", { method: "POST", headers: bearer(token) })).status).toBe(200);
+  });
+
+  test("revoked token gets 401", async () => {
+    const { app, db } = bearerApp();
+    const { id, token } = createToken(db, { name: "gone", scopes: ["read"] });
+    revokeToken(db, id);
+    expect((await app.request("/api/tree", { headers: bearer(token) })).status).toBe(401);
+  });
+
+  test("21st failed Bearer attempt from one IP gets 429", async () => {
+    const { app } = bearerApp();
+    for (let i = 0; i < 20; i++) {
+      expect((await app.request("/api/tree", { headers: bearer("sat_wrong") })).status).toBe(401);
+    }
+    expect((await app.request("/api/tree", { headers: bearer("sat_wrong") })).status).toBe(429);
+  });
+
+  test("/api/tokens is 403 for a Bearer token even with admin scope", async () => {
+    const { app, db } = bearerApp();
+    const { token } = createToken(db, { name: "adm", scopes: ["admin"] });
+    expect((await app.request("/api/tokens", { headers: bearer(token) })).status).toBe(403);
+  });
+
+  test("unlisted routes are 403 for admin tokens", async () => {
+    const { app, db } = bearerApp();
+    const { token } = createToken(db, { name: "adm", scopes: ["admin"] });
+    expect((await app.request("/api/nodes/x/unlisted", { method: "POST", headers: bearer(token) })).status).toBe(403);
+    expect((await app.request("/api/nodes/x/y/z", { headers: bearer(token) })).status).toBe(403);
+  });
+
+  test("an invalid Authorization header wins over a valid cookie", async () => {
+    const { app } = bearerApp();
+    const totp = await setupAndGetSecret(app);
+    const login = await post(app, "/api/auth/login", { password: PASSWORD, code: totp.generate() });
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const res = await app.request("/api/tree", { headers: { cookie, authorization: "Bearer sat_nope" } });
+    expect(res.status).toBe(401);
+  });
+
+  test("route templates are anchored", () => {
+    expect(matchRouteScope("GET", "/api/nodes/a")).toBe("read");
+    expect(matchRouteScope("GET", "/api/nodes/a/b")).toBeNull();
   });
 });
