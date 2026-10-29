@@ -41,9 +41,13 @@ export interface NodeInput {
   jumpMode?: JumpMode;
   jumpNodeId?: string | null;
   notes?: string | null;
+  importSource?: string | null;
+  importKey?: string | null;
 }
 
-export type NodePatch = Partial<Omit<NodeInput, "parentId" | "kind">> & { autopilotUntil?: number | null };
+export type NodePatch = Partial<Omit<NodeInput, "parentId" | "kind" | "importSource" | "importKey">> & {
+  autopilotUntil?: number | null;
+};
 
 const PATCH_COLUMNS: Record<keyof NodePatch, string> = {
   name: "name",
@@ -232,8 +236,8 @@ export function createNode(db: Database, input: NodeInput): InventoryNode {
   const id = crypto.randomUUID();
   db.transaction(() => {
     db.run(
-      `INSERT INTO nodes (id, parent_id, kind, name, os, address, port, user, shell, credential_id, jump_mode, jump_node_id, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO nodes (id, parent_id, kind, name, os, address, port, user, shell, credential_id, jump_mode, jump_node_id, notes, import_source, import_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         input.parentId,
@@ -248,6 +252,8 @@ export function createNode(db: Database, input: NodeInput): InventoryNode {
         input.jumpMode ?? "inherit",
         input.jumpNodeId ?? null,
         input.notes ?? null,
+        input.importSource ?? null,
+        input.importKey ?? null,
       ],
     );
     validateSubtree(db, id);
