@@ -81,6 +81,18 @@ const MIGRATIONS: string[] = [
     value TEXT NOT NULL
   );
   `,
+  `
+  CREATE TABLE api_tokens (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    hash TEXT NOT NULL UNIQUE,
+    scopes TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    last_used_at INTEGER,
+    revoked_at INTEGER
+  );
+  `,
 ];
 
 export function openDb(path: string): Database {
