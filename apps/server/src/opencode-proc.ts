@@ -107,14 +107,33 @@ export function startOpencode(opts: ProcOptions): OpencodeProc {
     }
   };
 
+  const scheduleRestart = () => {
+    restarts++;
+    state = "backoff";
+    timer = setTimeout(() => {
+      timer = undefined;
+      launch();
+    }, delay);
+    delay = Math.min(delay * 2, maxBackoff);
+  };
+
   const launch = () => {
     if (stopping) return;
-    const proc = Bun.spawn([opts.bin, "serve", "--hostname", "127.0.0.1", "--port", String(opts.port)], {
-      cwd: opts.infraDir,
-      env,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    let proc: ReturnType<typeof Bun.spawn>;
+    try {
+      proc = Bun.spawn([opts.bin, "serve", "--hostname", "127.0.0.1", "--port", String(opts.port)], {
+        cwd: opts.infraDir,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    } catch (err) {
+      // A missing or unexecutable binary must not take sysadm down: it backs off like any crash.
+      onLine("opencode", `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+      lastExit = -1;
+      scheduleRestart();
+      return;
+    }
     const began = Date.now();
     current = proc;
     startedAt = began;
@@ -131,13 +150,7 @@ export function startOpencode(opts: ProcOptions): OpencodeProc {
         return;
       }
       if (Date.now() - began >= STABLE_MS) delay = minBackoff;
-      restarts++;
-      state = "backoff";
-      timer = setTimeout(() => {
-        timer = undefined;
-        launch();
-      }, delay);
-      delay = Math.min(delay * 2, maxBackoff);
+      scheduleRestart();
     });
   };
 

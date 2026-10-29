@@ -125,6 +125,14 @@ test("child that ignores SIGTERM is killed after about 5 s", async () => {
   expect(alive(pid)).toBe(false);
 }, 20_000);
 
+test("missing binary does not throw: it goes to backoff and counts a restart", async () => {
+  const proc = start({ bin: join(dir, "no-such-opencode"), minBackoffMs: 2_000, maxBackoffMs: 4_000 });
+  await waitFor(() => proc.status().state === "backoff");
+  expect(proc.status().restarts).toBe(1);
+  expect(proc.status().lastExitCode).toBe(-1);
+  await proc.stop();
+}, 20_000);
+
 test("password null: no OPENCODE_SERVER_PASSWORD in env and no auth header", async () => {
   const { bin, dump } = fakeBin("serve");
   const proc = start({ bin, password: null });
