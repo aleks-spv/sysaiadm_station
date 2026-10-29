@@ -14,6 +14,8 @@ COPY --from=build /src/packages/shared ./packages/shared
 COPY --from=build /src/apps/web/dist ./apps/web/dist
 COPY --from=build /src/skills ./skills
 ENV SKILLS_DIR=/app/skills WEB_DIST=/app/apps/web/dist
+# Volumes mounted at /data and /infra inherit this ownership; otherwise SQLite cannot create its file.
+RUN mkdir -p /data /infra && chown 1000:1000 /data /infra
 USER 1000:1000
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s CMD ["bun", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
