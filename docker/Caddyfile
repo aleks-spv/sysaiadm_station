@@ -1,0 +1,11 @@
+{$SYSADM_DOMAIN:localhost} {
+	tls {$SYSADM_TLS:internal}
+
+	request_body {
+		max_size 6MB
+	}
+
+	reverse_proxy sysadm:8080 {
+		flush_interval -1
+	}
+}

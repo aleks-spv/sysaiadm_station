@@ -1,0 +1,59 @@
+name: sysadm
+
+# Only caddy publishes a port. opencode has no published port and no access to sysadm-data.
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "${SYSADM_HTTPS_PORT:-443}:443"
+    environment:
+      SYSADM_DOMAIN: ${SYSADM_DOMAIN:-localhost}
+      SYSADM_TLS: ${SYSADM_TLS:-internal}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    networks: [public]
+
+  sysadm:
+    build:
+      context: .
+      dockerfile: docker/sysadm.Dockerfile
+    restart: unless-stopped
+    # .env holds SYSADM_MASTER_KEY, so it goes only to this service.
+    env_file: .env
+    environment:
+      DB_PATH: /data/sysadm.sqlite
+      INFRA_DIR: /infra
+      OPENCODE_URL: http://opencode:4096
+    volumes:
+      - sysadm-data:/data
+      - infra:/infra
+    networks: [public, internal, egress]
+
+  opencode:
+    build:
+      context: .
+      dockerfile: docker/opencode.Dockerfile
+    restart: unless-stopped
+    # Explicit list, not env_file: the master key must never reach this container.
+    environment:
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?set OPENCODE_SERVER_PASSWORD in .env}
+      SYSADM_INTERNAL_URL: http://sysadm:3001
+      SYSADM_INTERNAL_TOKEN: ${SYSADM_INTERNAL_TOKEN:?set SYSADM_INTERNAL_TOKEN in .env}
+    volumes:
+      - infra:/infra:ro
+      - opencode-state:/home/node/.local/share/opencode
+    networks: [internal, egress]
+
+volumes:
+  sysadm-data:
+  infra:
+  opencode-state:
+  caddy-data:
+
+networks:
+  public: {}
+  internal:
+    internal: true
+  egress: {}

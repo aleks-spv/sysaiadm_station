@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [{ "package": "/opt/sysadm-plugin" }],
+  "permissions": [
+    { "action": "remote_exec", "resource": "*", "effect": "ask" },
+    { "action": "remote_exec_dangerous", "resource": "*", "effect": "ask" }
+  ],
+  "policies": [
+    { "action": "tool.use", "resource": "shell:*", "effect": "deny" },
+    { "action": "tool.use", "resource": "edit:*", "effect": "deny" },
+    { "action": "tool.use", "resource": "external_directory:*", "effect": "deny" },
+    { "action": "tool.use", "resource": "webfetch:*", "effect": "deny" },
+    { "action": "tool.use", "resource": "websearch:*", "effect": "deny" },
+    { "action": "tool.use", "resource": "read:/proc/*", "effect": "deny" },
+    { "action": "tool.use", "resource": "read:/etc/*", "effect": "deny" }
+  ]
+}
