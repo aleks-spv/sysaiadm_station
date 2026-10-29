@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { randomBytes } from "node:crypto";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -12,26 +13,46 @@ import { credentialsRoutes } from "./routes/credentials";
 import { importRoutes } from "./routes/import";
 import { startAutopilotExpiry, tasksRoutes } from "./routes/tasks";
 import { createBus, eventsRoutes, startEventBridge } from "./routes/events";
+import { systemRoutes } from "./routes/system";
 import { materializeAll } from "./materialize";
 import { makeClient, type OpenCodeClient } from "./opencode";
+import { startOpencode, writeOpencodeConfig, type OpencodeProc } from "./opencode-proc";
+import { createLog, type Log } from "./log";
 import { loadMasterKey } from "./vault";
 
 const MAX_BODY = 1024 * 1024;
 const MAX_IMPORT_BODY = 5 * 1024 * 1024;
-const MIN_TOKEN_LENGTH = 32;
+const VERSION = "0.1.0";
 
 export interface Config {
   masterKey: Buffer;
-  internalToken: string;
-  opencodeUrl: string;
-  opencodePassword: string;
   infraDir: string;
   dbPath: string;
   skillsDir: string;
   webDist: string;
+  publicPort: number;
+  internalPort: number;
+  opencodeBin: string;
+  opencodePort: number;
+  opencodeHome: string;
+  pluginPath: string;
+}
+
+// Secrets generated on every start; they never reach the .env file.
+export interface Runtime {
+  internalToken: string;
+  opencodePassword: string;
+  log: Log;
+  proc: Pick<OpencodeProc, "status" | "restart">;
 }
 
 export class ConfigError extends Error {}
+
+function port(env: Record<string, string | undefined>, name: string, fallback: number, problems: string[]): number {
+  const value = Number(env[name] ?? fallback);
+  if (!Number.isInteger(value) || value < 1 || value > 65535) problems.push(`${name} must be a port number`);
+  return value;
+}
 
 // Fails fast with every problem listed at once, so a bad .env is fixed in one pass.
 export function readConfig(env: Record<string, string | undefined>): Config {
@@ -41,12 +62,11 @@ export function readConfig(env: Record<string, string | undefined>): Config {
     if (!value) problems.push(`${name} is required`);
     return value ?? "";
   };
-  const internalToken = need("SYSADM_INTERNAL_TOKEN");
-  if (internalToken && internalToken.length < MIN_TOKEN_LENGTH) problems.push(`SYSADM_INTERNAL_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters`);
-  const opencodeUrl = need("OPENCODE_URL");
-  const opencodePassword = need("OPENCODE_SERVER_PASSWORD");
   const infraDir = need("INFRA_DIR");
   const dbPath = need("DB_PATH");
+  const publicPort = port(env, "PUBLIC_PORT", 8080, problems);
+  const internalPort = port(env, "INTERNAL_PORT", 3001, problems);
+  const opencodePort = port(env, "OPENCODE_PORT", 4096, problems);
   let masterKey: Buffer | undefined;
   try {
     masterKey = loadMasterKey(env);
@@ -56,13 +76,16 @@ export function readConfig(env: Record<string, string | undefined>): Config {
   if (problems.length > 0 || masterKey === undefined) throw new ConfigError(problems.join("\n"));
   return {
     masterKey,
-    internalToken,
-    opencodeUrl,
-    opencodePassword,
     infraDir,
     dbPath,
     skillsDir: env.SKILLS_DIR ?? "/app/skills",
     webDist: env.WEB_DIST ?? "apps/web/dist",
+    publicPort,
+    internalPort,
+    opencodeBin: env.OPENCODE_BIN ?? "opencode",
+    opencodePort,
+    opencodeHome: env.OPENCODE_HOME ?? "/data/opencode",
+    pluginPath: env.PLUGIN_PATH ?? "/app/packages/plugin",
   };
 }
 
@@ -97,13 +120,18 @@ const SECURITY_HEADERS: Record<string, string> = {
 export interface BuiltApp {
   publicApp: Hono;
   internalApp: Hono;
+  db: Database;
   stop: () => void;
 }
 
-export async function buildApp(config: Config, options: { background: boolean }): Promise<BuiltApp> {
+export async function buildApp(config: Config, options: { background: boolean; runtime: Runtime }): Promise<BuiltApp> {
+  const { runtime } = options;
   const db = openDb(config.dbPath);
   const auth = createAuth({ db, masterKey: config.masterKey });
-  const client: OpenCodeClient = makeClient({ baseUrl: config.opencodeUrl, password: config.opencodePassword });
+  const client: OpenCodeClient = makeClient({
+    baseUrl: `http://127.0.0.1:${config.opencodePort}`,
+    password: runtime.opencodePassword,
+  });
   const bus = createBus();
   syncBuiltinSkills(db, config.skillsDir);
   await materializeAll(db, config.infraDir);
@@ -124,7 +152,14 @@ export async function buildApp(config: Config, options: { background: boolean })
   const limitImport = bodyLimit({ maxSize: MAX_IMPORT_BODY, onError: (c) => c.json({ error: "payload too large" }, 413) });
   app.use("*", (c, next) => (c.req.path === "/api/import/preview" ? limitImport(c, next) : limitDefault(c, next)));
 
-  app.get("/api/health", (c) => c.json({ ok: true }));
+  app.get("/api/health", (c) => {
+    try {
+      db.query("SELECT 1").get();
+      return c.json({ ok: true });
+    } catch {
+      return c.json({ ok: false }, 503);
+    }
+  });
   app.route("/api/auth", authRoutes(auth));
 
   const guard = requireAuth(auth, db);
@@ -137,15 +172,17 @@ export async function buildApp(config: Config, options: { background: boolean })
   app.route("/", importRoutes({ db, infraDir: config.infraDir }));
   app.route("/", tasksRoutes(taskDeps));
   app.route("/", eventsRoutes(bus));
+  app.route("/", systemRoutes({ db, log: runtime.log, proc: runtime.proc, startedAt: Date.now(), version: VERSION }));
   app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
   app.get("*", serveStatic({ root: config.webDist }), serveStatic({ root: config.webDist, path: "index.html" }));
 
-  const internalApp = createInternalApp({ db, token: config.internalToken, masterKey: config.masterKey });
+  const internalApp = createInternalApp({ db, token: runtime.internalToken, masterKey: config.masterKey });
 
   return {
     publicApp: app,
     internalApp,
+    db,
     stop: () => {
       for (const stop of stops) stop();
       db.close();
@@ -161,9 +198,39 @@ if (import.meta.main) {
     console.error(err instanceof Error ? err.message : "invalid configuration");
     process.exit(1);
   }
-  const built = await buildApp(config, { background: true });
-  Bun.serve({ port: 8080, fetch: built.publicApp.fetch });
-  // Internal API: reachable only inside the compose network, never published by compose.
-  Bun.serve({ port: 3001, fetch: built.internalApp.fetch });
-  console.log("sysadm listening on :8080 (public) and :3001 (internal)");
+  const internalToken = randomBytes(32).toString("hex");
+  const opencodePassword = randomBytes(32).toString("hex");
+  const log = createLog({ secrets: [process.env.SYSADM_MASTER_KEY ?? "", internalToken, opencodePassword] });
+
+  const base = JSON.parse(readFileSync(new URL("../opencode.base.json", import.meta.url), "utf8")) as Record<string, unknown>;
+  writeOpencodeConfig(config.infraDir, config.pluginPath, base);
+  const proc = startOpencode({
+    bin: config.opencodeBin,
+    port: config.opencodePort,
+    home: config.opencodeHome,
+    infraDir: config.infraDir,
+    internalUrl: `http://127.0.0.1:${config.internalPort}`,
+    internalToken,
+    password: opencodePassword,
+    onLine: (source, line) => log.write(source, "info", line),
+  });
+
+  const built = await buildApp(config, { background: true, runtime: { internalToken, opencodePassword, log, proc } });
+  const publicServer = Bun.serve({ port: config.publicPort, fetch: built.publicApp.fetch });
+  // Internal API: loopback only. The opencode plugin reaches it from the child process.
+  const internalServer = Bun.serve({ hostname: "127.0.0.1", port: config.internalPort, fetch: built.internalApp.fetch });
+  log.write("app", "info", `sysadm listening on :${config.publicPort} (public) and 127.0.0.1:${config.internalPort} (internal)`);
+
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) process.exit(1);
+    shuttingDown = true;
+    publicServer.stop();
+    internalServer.stop();
+    await proc.stop();
+    built.stop();
+    process.exitCode = 0;
+  };
+  process.on("SIGTERM", () => void shutdown());
+  process.on("SIGINT", () => void shutdown());
 }
