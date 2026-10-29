@@ -89,6 +89,29 @@ expect 200 "credentials"
 jq -e 'all(.[]; keys | all(. == "id" or . == "name" or . == "type" or . == "createdAt"))' "$BODY" >/dev/null \
   || fail "credential list exposes fields other than id/name/type/createdAt"
 
+# Bearer tokens: a read-only token reads the tree, and is refused on mutations and on /api/tokens.
+call POST /api/tokens -H "$JSON" -d '{"name":"smoke-read","scopes":["read"],"ttlDays":1}'
+expect 201 "create read token"
+READ_TOKEN="$(jq -r '.token' "$BODY")"
+[[ "$READ_TOKEN" == sat_* ]] || fail "token does not start with sat_"
+
+bearer() {
+  local method="$1" path="$2"
+  shift 2
+  STATUS="$(curl -sS -o "$BODY" -w '%{http_code}' -X "$method" "$BASE$path" \
+    -H "Authorization: Bearer $READ_TOKEN" "$@")"
+}
+bearer GET /api/tree
+expect 200 "read token on tree"
+bearer POST /api/nodes -H "$JSON" -d '{"kind":"company","name":"x","parentId":null}'
+expect 403 "read token creating a node"
+bearer GET /api/tokens
+expect 403 "read token listing tokens"
+
+call GET /api/system/health
+expect 200 "system health"
+jq -e 'has("opencode")' "$BODY" >/dev/null || fail "health has no opencode state"
+
 call POST /internal/exec -H "$JSON" -d '{"sessionID":"x","command":"uptime"}'
 [ "$STATUS" = "404" ] || fail "internal route answers on the public port (HTTP $STATUS)"
 
