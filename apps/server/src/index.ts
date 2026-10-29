@@ -9,6 +9,7 @@ import { openDb } from "./db";
 import { createInternalApp } from "./routes/internal";
 import { inventoryRoutes } from "./routes/inventory";
 import { credentialsRoutes } from "./routes/credentials";
+import { importRoutes } from "./routes/import";
 import { startAutopilotExpiry, tasksRoutes } from "./routes/tasks";
 import { createBus, eventsRoutes, startEventBridge } from "./routes/events";
 import { materializeAll } from "./materialize";
@@ -132,6 +133,7 @@ export async function buildApp(config: Config, options: { background: boolean })
   });
   app.route("/", inventoryRoutes({ ...taskDeps, bus }));
   app.route("/", credentialsRoutes(db, config.masterKey));
+  app.route("/", importRoutes({ db, infraDir: config.infraDir }));
   app.route("/", tasksRoutes(taskDeps));
   app.route("/", eventsRoutes(bus));
   app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
