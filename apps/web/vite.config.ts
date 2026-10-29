@@ -4,6 +4,9 @@ import tailwindcss from "@tailwindcss/vite";
 import checker from "vite-plugin-checker";
 
 export default defineConfig({
+  resolve: {
+    alias: { "@": new URL("./src", import.meta.url).pathname },
+  },
   plugins: [
     react(),
     tailwindcss(),
