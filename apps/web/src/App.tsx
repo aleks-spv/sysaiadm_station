@@ -5,6 +5,7 @@ import ImportPage from "./pages/ImportPage";
 import LoginPage from "./pages/LoginPage";
 import NodePage from "./pages/NodePage";
 import SettingsPage from "./pages/SettingsPage";
+import SystemPage from "./pages/SystemPage";
 import TaskPage from "./pages/TaskPage";
 import TasksPage from "./pages/TasksPage";
 
@@ -25,6 +26,7 @@ function Layout() {
           <Link to="/tasks">Задачи</Link>
           <Link to="/import">Импорт</Link>
           <Link to="/settings">Настройки</Link>
+          <Link to="/system">Система</Link>
         </nav>
         <InventoryTree />
         <button className="text-left text-xs text-neutral-500 underline" onClick={logout}>
@@ -54,6 +56,7 @@ export const router = createBrowserRouter([
       { path: "tasks/:id", element: <TaskPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "import", element: <ImportPage /> },
+      { path: "system", element: <SystemPage /> },
       { path: "*", element: <Navigate to="/" replace /> },
     ],
   },
