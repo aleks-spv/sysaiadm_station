@@ -3,7 +3,7 @@ import { ALLOW, requireEnv } from "./index";
 
 describe("sysadm plugin", () => {
   test("model sees only the whitelisted tools", () => {
-    expect([...ALLOW].sort()).toEqual(["glob", "grep", "question", "read", "remote_exec", "skill"]);
+    expect([...ALLOW].sort()).toEqual(["question", "remote_exec", "skill"]);
     expect(ALLOW.has("shell")).toBe(false);
     expect(ALLOW.has("webfetch")).toBe(false);
   });

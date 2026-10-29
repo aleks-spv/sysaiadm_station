@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin";
 
 // Tools the model may see. Everything else is removed from the context hook.
-export const ALLOW = new Set(["remote_exec", "skill", "question", "read", "glob", "grep"]);
+export const ALLOW = new Set(["remote_exec", "skill", "question"]);
 
 type Verdict = {
   verdict: "deny" | "dangerous" | "normal";

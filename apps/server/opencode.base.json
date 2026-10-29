@@ -12,6 +12,9 @@
     { "action": "tool.use", "resource": "webfetch:*", "effect": "deny" },
     { "action": "tool.use", "resource": "websearch:*", "effect": "deny" },
     { "action": "tool.use", "resource": "read:/proc/*", "effect": "deny" },
-    { "action": "tool.use", "resource": "read:/etc/*", "effect": "deny" }
+    { "action": "tool.use", "resource": "read:/etc/*", "effect": "deny" },
+    { "action": "tool.use", "resource": "read:*", "effect": "deny" },
+    { "action": "tool.use", "resource": "glob:*", "effect": "deny" },
+    { "action": "tool.use", "resource": "grep:*", "effect": "deny" }
   ]
 }
