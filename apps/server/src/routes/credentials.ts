@@ -63,7 +63,7 @@ export function credentialsRoutes(db: Database, masterKey: Buffer, now: () => nu
       "INSERT INTO credentials (id, name, type, ciphertext, iv, tag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       [id, body.name, type, sealed.ciphertext, sealed.iv, sealed.tag, now()],
     );
-    audit(db, { actor: "admin", action: "credential_create", detail: { id, type } });
+    audit(db, { actor: c.get("actor"), action: "credential_create", detail: { id, type } });
     const row = findRow(id);
     return c.json(row ? toCredential(row) : null, 201);
   });
@@ -84,7 +84,7 @@ export function credentialsRoutes(db: Database, masterKey: Buffer, now: () => nu
       const sealed = seal(masterKey, JSON.stringify(payload), id);
       db.run("UPDATE credentials SET ciphertext = ?, iv = ?, tag = ? WHERE id = ?", [sealed.ciphertext, sealed.iv, sealed.tag, id]);
     }
-    audit(db, { actor: "admin", action: "credential_update", detail: { id, secretChanged: hasSecret } });
+    audit(db, { actor: c.get("actor"), action: "credential_update", detail: { id, secretChanged: hasSecret } });
     const updated = findRow(id);
     return c.json(updated ? toCredential(updated) : null);
   });
@@ -95,7 +95,7 @@ export function credentialsRoutes(db: Database, masterKey: Buffer, now: () => nu
     const used = db.query<{ one: number }, [string]>("SELECT 1 AS one FROM nodes WHERE credential_id = ? LIMIT 1").get(id);
     if (used) return c.json({ error: "credential is in use" }, 409);
     db.run("DELETE FROM credentials WHERE id = ?", [id]);
-    audit(db, { actor: "admin", action: "credential_delete", detail: { id } });
+    audit(db, { actor: c.get("actor"), action: "credential_delete", detail: { id } });
     return c.json({ ok: true });
   });
 

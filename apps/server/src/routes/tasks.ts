@@ -115,7 +115,7 @@ export function tasksRoutes(deps: TaskDeps): Hono {
       body.title,
       now(),
     ]);
-    audit(db, { actor: "admin", action: "task_create", nodeId, taskId, detail: { title: body.title, autopilot } });
+    audit(db, { actor: c.get("actor"), action: "task_create", nodeId, taskId, detail: { title: body.title, autopilot } });
     if (typeof body.model?.providerID === "string" && typeof body.model?.modelID === "string") {
       await setModel(client, session.id, body.model.providerID, body.model.modelID);
     }
@@ -159,7 +159,7 @@ export function tasksRoutes(deps: TaskDeps): Hono {
     if (!row) return c.json({ error: "not found" }, 404);
     await interrupt(client, row.session_id);
     db.run("UPDATE tasks SET status = 'stopped' WHERE id = ?", [row.id]);
-    audit(db, { actor: "admin", action: "stop", nodeId: row.node_id, taskId: row.id });
+    audit(db, { actor: c.get("actor"), action: "stop", nodeId: row.node_id, taskId: row.id });
     return c.json({ ok: true });
   });
 
@@ -175,9 +175,11 @@ export function tasksRoutes(deps: TaskDeps): Hono {
     const body = await c.req.json().catch(() => null);
     const decision = DECISIONS.find((d) => d === body?.decision);
     if (!decision) return c.json({ error: "decision must be once, always or reject" }, 400);
+    // A rule that outlives the request is an admin decision: tokens may only answer once or reject.
+    if (decision === "always" && c.get("scopes") !== "*") return c.json({ error: "always requires an admin session" }, 403);
     const requestID = c.req.param("requestID");
     await reply(client, row.session_id, requestID, decision);
-    audit(db, { actor: "admin", action: "permission", nodeId: row.node_id, taskId: row.id, detail: { requestID, decision } });
+    audit(db, { actor: c.get("actor"), action: "permission", nodeId: row.node_id, taskId: row.id, detail: { requestID, decision } });
     return c.json({ ok: true });
   });
 
@@ -188,7 +190,7 @@ export function tasksRoutes(deps: TaskDeps): Hono {
     const body = await c.req.json().catch(() => null);
     if (typeof body?.key !== "string" || body.key.length === 0) return c.json({ error: "key is required" }, 400);
     await connectKey(client, providerID, body.key);
-    audit(db, { actor: "admin", action: "provider_key", detail: { providerID } });
+    audit(db, { actor: c.get("actor"), action: "provider_key", detail: { providerID } });
     return c.json({ ok: true });
   });
 

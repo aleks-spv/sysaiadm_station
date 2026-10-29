@@ -101,7 +101,7 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
         jumpNodeId: optString(body?.jumpNodeId),
         notes: optString(body?.notes),
       });
-      audit(db, { actor: "admin", action: "node_create", nodeId: node.id, detail: { kind, name } });
+      audit(db, { actor: c.get("actor"), action: "node_create", nodeId: node.id, detail: { kind, name } });
       await refresh(node.id);
       return c.json(node, 201);
     } catch (err) {
@@ -132,15 +132,18 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
     if (body.jumpMode !== undefined) patch.jumpMode = oneOf(body.jumpMode, JUMP_MODES);
     if (body.jumpNodeId !== undefined) patch.jumpNodeId = optString(body.jumpNodeId);
     if (body.notes !== undefined) patch.notes = optString(body.notes);
+    if (typeof body.autopilot === "boolean" && c.get("scopes") !== "*") {
+      return c.json({ error: "autopilot requires an admin session" }, 403);
+    }
     if (typeof body.autopilot === "boolean") patch.autopilotUntil = body.autopilot ? now() + AUTOPILOT_MS : null;
     if (patch.jumpNodeId && !getNode(db, patch.jumpNodeId)) return c.json({ error: "jumpNodeId not found" }, 400);
 
     try {
       const node = updateNode(db, id, patch);
-      audit(db, { actor: "admin", action: "node_update", nodeId: id, detail: { fields: Object.keys(patch) } });
+      audit(db, { actor: c.get("actor"), action: "node_update", nodeId: id, detail: { fields: Object.keys(patch) } });
       if (typeof body.autopilot === "boolean") {
         await applyAutopilot(deps, id);
-        audit(db, { actor: "admin", action: body.autopilot ? "autopilot_on" : "autopilot_off", nodeId: id });
+        audit(db, { actor: c.get("actor"), action: body.autopilot ? "autopilot_on" : "autopilot_off", nodeId: id });
       }
       await refresh(id);
       return c.json(node);
@@ -155,7 +158,7 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
     if (typeof body?.parentId !== "string") return c.json({ error: "parentId is required" }, 400);
     try {
       const node = moveNode(db, id, body.parentId);
-      audit(db, { actor: "admin", action: "node_move", nodeId: id, detail: { parentId: body.parentId } });
+      audit(db, { actor: c.get("actor"), action: "node_move", nodeId: id, detail: { parentId: body.parentId } });
       await refresh(id);
       return c.json(node);
     } catch (err) {
@@ -169,7 +172,7 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
     try {
       deleteNode(db, id);
       await removeNode(infraDir, id);
-      audit(db, { actor: "admin", action: "node_delete", nodeId: id });
+      audit(db, { actor: c.get("actor"), action: "node_delete", nodeId: id });
       return c.json({ ok: true });
     } catch (err) {
       return failure(c, err);
@@ -180,7 +183,7 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
     const id = c.req.param("id");
     if (!getNode(db, id)) return c.json({ error: "not found" }, 404);
     db.run("UPDATE nodes SET host_key = NULL WHERE id = ?", [id]);
-    audit(db, { actor: "admin", action: "hostkey_reset", nodeId: id });
+    audit(db, { actor: c.get("actor"), action: "hostkey_reset", nodeId: id });
     return c.json({ ok: true });
   });
 
@@ -193,7 +196,7 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
     }
     try {
       const node = setNodeSkills(db, id, skills);
-      audit(db, { actor: "admin", action: "node_skills", nodeId: id, detail: { skills } });
+      audit(db, { actor: c.get("actor"), action: "node_skills", nodeId: id, detail: { skills } });
       await refresh(id);
       return c.json(node);
     } catch (err) {
@@ -212,7 +215,7 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
       return c.json({ error: "id, name, description, content are required" }, 400);
     }
     db.run("INSERT INTO skills (id, name, description, content, builtin) VALUES (?, ?, ?, ?, 0)", [id, name, description, content]);
-    audit(db, { actor: "admin", action: "skill_create", detail: { id } });
+    audit(db, { actor: c.get("actor"), action: "skill_create", detail: { id } });
     return c.json({ id }, 201);
   });
 
@@ -226,7 +229,7 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
       return c.json({ error: "name, description, content are required" }, 400);
     }
     db.run("UPDATE skills SET name = ?, description = ?, content = ? WHERE id = ?", [body.name, body.description, body.content, id]);
-    audit(db, { actor: "admin", action: "skill_update", detail: { id } });
+    audit(db, { actor: c.get("actor"), action: "skill_update", detail: { id } });
     return c.json({ id });
   });
 
@@ -240,7 +243,7 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
     } catch {
       return c.json({ error: "skill is in use" }, 409);
     }
-    audit(db, { actor: "admin", action: "skill_delete", detail: { id } });
+    audit(db, { actor: c.get("actor"), action: "skill_delete", detail: { id } });
     return c.json({ ok: true });
   });
 

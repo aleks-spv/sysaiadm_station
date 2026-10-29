@@ -71,7 +71,7 @@ export function importRoutes(deps: { db: Database; infraDir: string; now?: () =>
 
     let result;
     try {
-      result = applyImport(deps.db, entry.tree, entry.parentId, { skipKeys: keys });
+      result = applyImport(deps.db, entry.tree, entry.parentId, { skipKeys: keys, actor: c.get("actor") });
     } catch (err) {
       const message = err instanceof Error ? err.message : "import failed";
       if (message.startsWith("JUMP_")) return c.json({ error: message }, 422);
