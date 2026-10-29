@@ -1,13 +1,21 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { Credential } from "@sysadm/shared";
-import { api, type AuditRow, type Skill } from "../api";
+import { api, type ApiToken, type AuditRow, type Skill } from "../api";
 
-type Tab = "credentials" | "skills" | "providers" | "audit";
+type Tab = "credentials" | "skills" | "providers" | "tokens" | "audit";
 const TABS: Array<[Tab, string]> = [
   ["credentials", "Креды"],
   ["skills", "Скилы"],
   ["providers", "Провайдеры"],
+  ["tokens", "API-токены"],
   ["audit", "Аудит"],
+];
+const SCOPES: Array<[string, string]> = [
+  ["read", "чтение"],
+  ["tasks", "задачи"],
+  ["approve", "ответы на запросы"],
+  ["logs", "логи"],
+  ["admin", "управление"],
 ];
 const inputClass = "w-full rounded border border-neutral-300 px-2 py-1 text-sm";
 const buttonClass = "rounded bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-50";
@@ -213,6 +221,118 @@ function AuditTab() {
   );
 }
 
+// The raw token is shown once, from component memory only: it is never stored or logged.
+function TokensTab() {
+  const [list, setList] = useState<ApiToken[]>([]);
+  const [form, setForm] = useState({ name: "", scopes: ["read"], ttlDays: "90" });
+  const [created, setCreated] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const load = () => api.tokens().then(setList).catch((err: unknown) => setMessage(errorText(err)));
+  useEffect(() => {
+    load();
+  }, []);
+
+  const toggle = (scope: string) =>
+    setForm((f) => ({ ...f, scopes: f.scopes.includes(scope) ? f.scopes.filter((s) => s !== scope) : [...f.scopes, scope] }));
+
+  const create = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await api.createToken({ name: form.name, scopes: form.scopes, ttlDays: Number(form.ttlDays) });
+      setCreated(res.token);
+      setForm({ name: "", scopes: ["read"], ttlDays: "90" });
+      load();
+    } catch (err) {
+      setMessage(errorText(err));
+    }
+  };
+
+  const revoke = (t: ApiToken) => {
+    if (!window.confirm(`Отозвать токен «${t.name}»?`)) return;
+    api.revokeToken(t.id).then(load).catch((err: unknown) => setMessage(errorText(err)));
+  };
+
+  const date = (ms: number | null) => (ms === null ? "—" : new Date(ms).toLocaleString());
+
+  return (
+    <div className="space-y-4">
+      {created && (
+        <div className="space-y-2 rounded border border-amber-400 bg-amber-50 p-3 text-sm">
+          <p>Токен показан один раз. Сохраните его сейчас: повторно он не отображается.</p>
+          <code className="block break-all">{created}</code>
+          <div className="flex gap-3">
+            <button className={buttonClass} onClick={() => void navigator.clipboard.writeText(created)}>
+              Скопировать
+            </button>
+            <button className="text-sm underline" onClick={() => setCreated(null)}>
+              Готово
+            </button>
+          </div>
+        </div>
+      )}
+      <table className="w-full text-left text-sm">
+        <thead className="text-neutral-500">
+          <tr>
+            <th className="py-1">Имя</th>
+            <th>Scope'ы</th>
+            <th>Создан</th>
+            <th>Истекает</th>
+            <th>Последнее использование</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((t) => (
+            <tr key={t.id} className="border-t">
+              <td className="py-1">{t.name}</td>
+              <td>{t.scopes.join(", ")}</td>
+              <td>{date(t.createdAt)}</td>
+              <td>{date(t.expiresAt)}</td>
+              <td>{date(t.lastUsedAt)}</td>
+              <td>
+                {t.revokedAt === null ? (
+                  <button className="text-red-700 underline" onClick={() => revoke(t)}>
+                    Отозвать
+                  </button>
+                ) : (
+                  <span className="text-neutral-500">отозван</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <form onSubmit={create} className="space-y-2 text-sm">
+        <input className={inputClass} placeholder="Имя токена" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+        <div className="flex flex-wrap gap-3">
+          {SCOPES.map(([id, label]) => (
+            <label key={id} className="flex items-center gap-1">
+              <input type="checkbox" checked={form.scopes.includes(id)} onChange={() => toggle(id)} />
+              {id} <span className="text-neutral-500">({label})</span>
+            </label>
+          ))}
+        </div>
+        <label className="flex items-center gap-2">
+          Срок, дней
+          <input
+            className="w-24 rounded border border-neutral-300 px-2 py-1"
+            type="number"
+            min={1}
+            max={365}
+            value={form.ttlDays}
+            onChange={(e) => setForm({ ...form, ttlDays: e.target.value })}
+          />
+        </label>
+        <button className={buttonClass} disabled={!form.name || form.scopes.length === 0}>
+          Создать токен
+        </button>
+      </form>
+      {message && <p className="text-sm text-neutral-600">{message}</p>}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>("credentials");
   return (
@@ -228,6 +348,7 @@ export default function SettingsPage() {
       {tab === "credentials" && <CredentialsTab />}
       {tab === "skills" && <SkillsTab />}
       {tab === "providers" && <ProvidersTab />}
+      {tab === "tokens" && <TokensTab />}
       {tab === "audit" && <AuditTab />}
     </div>
   );

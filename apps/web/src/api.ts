@@ -134,7 +134,47 @@ export const api = {
   },
   importApply: (token: string, skipKeys: string[]) =>
     request<ApplyResult>("POST", "/api/import/apply", { token, skipKeys }),
+
+  tokens: () => request<ApiToken[]>("GET", "/api/tokens"),
+  createToken: (body: { name: string; scopes: string[]; ttlDays: number }) =>
+    request<{ id: string; token: string; name: string; scopes: string[] }>("POST", "/api/tokens", body),
+  revokeToken: (id: string) => request<{ ok: true }>("DELETE", `/api/tokens/${id}`),
+
+  systemHealth: () => request<SystemHealth>("GET", "/api/system/health"),
+  systemLogs: (params: { source?: string; level?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.source) q.set("source", params.source);
+    if (params.level) q.set("level", params.level);
+    if (params.limit) q.set("limit", String(params.limit));
+    return request<LogEntry[]>("GET", `/api/system/logs?${q.toString()}`);
+  },
+  restartOpencode: () => request<{ ok: true }>("POST", "/api/system/opencode/restart"),
 };
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  scopes: string[];
+  createdAt: number;
+  expiresAt: number;
+  lastUsedAt: number | null;
+  revokedAt: number | null;
+}
+
+export interface SystemHealth {
+  version: string;
+  uptimeSec: number;
+  db: { ok: boolean; schemaVersion: number };
+  opencode: { state: "starting" | "running" | "backoff" | "stopped"; pid: number | null; restarts: number; lastExitCode: number | null; startedAt: number | null };
+  tasks: { running: number; waiting_permission: number };
+}
+
+export interface LogEntry {
+  ts: number;
+  source: "app" | "opencode";
+  level: "info" | "warn" | "error";
+  msg: string;
+}
 
 // Multipart uploads cannot carry a JSON Content-Type, so the request is built here.
 async function fetchForm<T>(path: string, form: FormData): Promise<T> {
