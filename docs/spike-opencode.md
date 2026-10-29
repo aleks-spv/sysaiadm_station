@@ -56,3 +56,23 @@ Runtime (что pending-запрос появляется в `/api/session/{id}/
 Блокер: A7 — нужно решение по аутентификации клиента.
 Не проверено без Docker и модели: A2 (загрузка), A3, A4, A5, A6 (exec), A8.
 Перед Wave 2 закрыть A7; перед T28b — все остальные.
+
+## Rev3
+
+### A7 (authMode)
+Команда: `env -u OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD=s1pass opencode serve --hostname 127.0.0.1 --port 4305`.
+Результат: без заголовка `GET /api/info` → 401; с `authorization: Basic base64("opencode:s1pass")` → 200.
+Важно: если в окружении задан `OPENCODE_PASSWORD`, он имеет приоритет и заголовок с другим паролем даёт 401; в процесс его надо убрать (`env -u`).
+Функция заголовка: `headers2` в `@opencode/client@2.2.0` → `Basic base64(username:password)`, совпадает с `authHeaders` в `apps/server/src/opencode.ts:12-14`.
+Статус: подтверждено, `authMode=basic`.
+
+### A2 (форма плагина)
+Типы: `@opencode/plugin@2.2.0` содержат и promise-форму `{id, setup}` (`dist/promise/plugin.d.ts`), и effect-форму `{id, effect}`.
+Проверено через API (`opencode serve`, сессия создана через `POST /api/session` с `location.directory`):
+- `GET /api/config` видит `plugins` из `<infra>/opencode.json` (конфиг парсится);
+- `GET /api/plugin` → `data: []` во всех вариантах: `package` = путь к файлу `dist/index.js`; `package` = каталог с `package.json` (`main: index.js`);
+- в `serve.log` с `--log-level debug` нет строк про плагин и нет ошибок загрузки.
+Статус: не подтверждено. Загрузка плагина не происходит, причина не найдена. Нужно выяснить, как 2.2.0 грузит `plugins` (npm-пакет по имени, `node_modules`, или другой формат записи), либо использовать `Plugin.define` из effect-билда.
+
+### Не проверено в этом раунде
+POLICY, BIN, INSTALL: не выполнялось.
