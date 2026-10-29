@@ -1,0 +1,9 @@
+{
+  "Connections": [
+    { "ID": "g-customers", "ConnectionType": 25, "Name": "Customers" },
+    { "ID": "h-web", "ConnectionType": 77, "Name": "web", "Host": "web.example.test", "Port": 22, "Username": "ops", "Group": "Customers\\ACME" },
+    { "ID": "h-rdp", "ConnectionType": 1, "Name": "rdp-01", "Host": "rdp.example.test", "Group": "Customers" },
+    { "ID": "k-cred", "ConnectionType": 26, "Name": "shared-cred", "Username": "admin", "Password": "FIXTURE-SECRET" }
+  ],
+  "Folders": []
+}

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Connections Name="Connections" Export="false" Protected="false" ConfVersion="2.6" FullFileEncryption="false">
+  <Node Name="Production" Type="Container" Descr="" Expanded="true">
+    <Node Name="DB" Type="Connection" Descr="" Hostname="db.example.test" Protocol="SSH2" Port="22" Username="ops" Password="FIXTURE-SECRET" />
+    <Node Name="Desktop" Type="Connection" Descr="" Hostname="desk.example.test" Protocol="RDP" Port="3389" Username="ops" Password="FIXTURE-SECRET" />
+  </Node>
+</Connections>
