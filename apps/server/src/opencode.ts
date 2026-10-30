@@ -25,8 +25,9 @@ export async function createSession(
   directory: string,
   title: string,
   permissions?: Permissions,
+  agent?: string,
 ) {
-  const input: SessionCreateInput = { location: { directory }, title, permissions };
+  const input: SessionCreateInput = { location: { directory }, title, permissions, agent };
   return client.session.create(input);
 }
 
@@ -40,6 +41,10 @@ export async function interrupt(client: OpenCodeClient, sessionID: string) {
 
 export async function setPermissions(client: OpenCodeClient, sessionID: string, permissions: Permissions) {
   return client.session.update({ sessionID, permissions });
+}
+
+export async function removeSession(client: OpenCodeClient, sessionID: string) {
+  return client.session.remove({ sessionID });
 }
 
 export async function listPending(client: OpenCodeClient, sessionID: string) {
@@ -69,6 +74,14 @@ export async function providers(client: OpenCodeClient) {
 
 export async function models(client: OpenCodeClient) {
   return client.model.list();
+}
+
+export async function agents(client: OpenCodeClient) {
+  return client.agent.list();
+}
+
+export async function integrations(client: OpenCodeClient) {
+  return client.integration.list();
 }
 
 export async function connectKey(client: OpenCodeClient, integrationID: string, key: string) {

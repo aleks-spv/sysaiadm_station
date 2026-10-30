@@ -93,6 +93,22 @@ const MIGRATIONS: string[] = [
     revoked_at INTEGER
   );
   `,
+  // Skills can now carry a github source reference alongside local/builtin ones.
+  `
+  ALTER TABLE skills ADD COLUMN source TEXT;
+  `,
+  // NULL means active; archived tasks are purged once their retention window passes.
+  `
+  ALTER TABLE tasks ADD COLUMN archived_at INTEGER;
+  `,
+  // Server card collected by /init; one row per node, replaced on every collection.
+  `
+  CREATE TABLE node_facts (
+    node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+    facts TEXT NOT NULL,
+    collected_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export function openDb(path: string): Database {

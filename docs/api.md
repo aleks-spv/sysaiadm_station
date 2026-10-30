@@ -1,4 +1,4 @@
-# sysadm API
+# SysAiAdm Station API
 
 Публичный REST API. Тот же набор маршрутов, что использует веб-интерфейс: `/api/*`.
 
@@ -62,6 +62,17 @@
 | GET | `/api/system/health` | read |
 | GET | `/api/system/logs` | logs |
 | POST | `/api/system/opencode/restart` | admin |
+| GET | `/api/system/opencode/version` | read |
+| POST | `/api/system/opencode/upgrade` | admin |
+| POST | `/api/inventory/export` | admin |
+| POST | `/api/inventory/import` | admin |
+| GET | `/api/backups` | admin |
+| PUT | `/api/backups/settings` | admin |
+| POST | `/api/backups` | admin |
+| GET | `/api/backups/:name` | admin |
+| DELETE | `/api/backups/:name` | admin |
+
+Экспорт: `POST /api/inventory/export` с `{rootId: string|null, withSecrets: boolean, passphrase: string}` (пароль не короче 12 символов) отдаёт файл `.sysaiadm`: JSON-конверт, тело зашифровано AES-256-GCM ключом из scrypt(пароль). Импорт: multipart `file`, `passphrase`, `parentId?`. Обновление opencode (`POST .../upgrade`) идёт в фоне и отвечает 202; состояние смотреть через `GET .../version` (`busy`).
 
 Вне таблицы: `GET /api/health` (без токена, отдаёт только `{"ok": true}` или 503), `/api/auth/*` (вход), `/api/tokens*` (только cookie-сессия).
 

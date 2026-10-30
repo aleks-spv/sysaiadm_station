@@ -13,6 +13,7 @@ import {
   type Hop,
   type Secret,
 } from "../ssh";
+import type { ExecOutputView, FilteredOutput } from "../plugins/types";
 import { open } from "../vault";
 
 const PER_NODE_LIMIT = 4;
@@ -29,9 +30,11 @@ export interface InternalDeps {
   masterKey: Buffer;
   now?: () => number;
   exec?: (input: ExecInput) => Promise<ExecOutput>;
+  // Plugin output filters (compression); skipped when the model asks for raw output.
+  filterOutput?: (output: ExecOutputView) => Promise<FilteredOutput>;
 }
 
-interface PlannedHop {
+export interface PlannedHop {
   nodeId: string;
   name: string;
   hop: Hop;
@@ -79,7 +82,7 @@ function loadSecret(db: Database, masterKey: Buffer, credentialId: string): Secr
 }
 
 // Hops from the outermost bastion to the target. Each hop uses its own effective creds and pinned key.
-function planHops(db: Database, masterKey: Buffer, nodeId: string): { eff: EffectiveNode; hops: PlannedHop[] } {
+export function planHops(db: Database, masterKey: Buffer, nodeId: string): { eff: EffectiveNode; hops: PlannedHop[] } {
   const eff = resolveEffective(db, nodeId);
   const ids = [...eff.jumpChain, nodeId];
   const hops = ids.map((id): PlannedHop => {
@@ -103,7 +106,7 @@ function planHops(db: Database, masterKey: Buffer, nodeId: string): { eff: Effec
 }
 
 // Compare-and-set pin per hop; returns the index of the first hop whose stored key differs.
-function pinHostKeys(db: Database, hops: PlannedHop[], keys: string[]): number | null {
+export function pinHostKeys(db: Database, hops: PlannedHop[], keys: string[]): number | null {
   for (const [i, planned] of hops.entries()) {
     db.run("UPDATE nodes SET host_key = ? WHERE id = ? AND host_key IS NULL", [keys[i], planned.nodeId]);
     const stored = db
@@ -178,7 +181,7 @@ export function createInternalApp(deps: InternalDeps): Hono {
       via,
       autopilot: (node.autopilotUntil ?? 0) > now(),
     };
-    if (verdict === "deny") result.reason = "denied by sysadm policy";
+    if (verdict === "deny") result.reason = "denied by SysAiAdm Station policy";
     return c.json(result);
   });
 
@@ -272,7 +275,11 @@ export function createInternalApp(deps: InternalDeps): Hono {
         },
       });
       setTaskStatus(db, task.id, "idle");
-      return c.json({ exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr, truncated: out.truncated });
+      const shown =
+        deps.filterOutput && body?.raw !== true
+          ? await deps.filterOutput({ nodeId: task.node_id, taskId: task.id, command, shell: eff.shell, exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr })
+          : { stdout: out.stdout, stderr: out.stderr };
+      return c.json({ exitCode: out.exitCode, ...shown, truncated: out.truncated });
     } finally {
       release(task.node_id);
     }

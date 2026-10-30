@@ -115,11 +115,78 @@ describe("auth", () => {
 
   test("status reports setup and authed", async () => {
     const { app } = setupApp();
-    const before = (await (await app.request("/api/auth/status")).json()) as { setup: boolean; authed: boolean };
-    expect(before).toEqual({ setup: false, authed: false });
+    const before = (await (await app.request("/api/auth/status")).json()) as { setup: boolean; authed: boolean; dev: boolean };
+    expect(before).toEqual({ setup: false, authed: false, dev: false });
     await setupAndGetSecret(app);
     const after = (await (await app.request("/api/auth/status")).json()) as { setup: boolean };
     expect(after.setup).toBe(true);
+  });
+
+  test("cookie gets Secure behind an https proxy", async () => {
+    const { app } = setupApp();
+    const totp = await setupAndGetSecret(app);
+    const res = await post(app, "/api/auth/login", { password: PASSWORD, code: totp.generate() }, { "x-forwarded-proto": "https" });
+    expect(res.headers.get("set-cookie")?.toLowerCase()).toContain("secure");
+  });
+
+  test("cookie over plain http has no Secure and still authenticates", async () => {
+    const { app } = setupApp();
+    const totp = await setupAndGetSecret(app);
+    const login = await post(app, "/api/auth/login", { password: PASSWORD, code: totp.generate() });
+    const setCookie = login.headers.get("set-cookie") ?? "";
+    expect(setCookie.toLowerCase()).not.toContain("secure");
+    const cookie = setCookie.split(";")[0];
+    const status = (await (await app.request("/api/auth/status", { headers: { cookie } })).json()) as { authed: boolean };
+    expect(status.authed).toBe(true);
+  });
+});
+
+describe("dev mode", () => {
+  function devApp(dev: boolean) {
+    const db = openDb(join(dir, `dev-${dev}.sqlite`));
+    const auth = createAuth({ db, masterKey: randomBytes(32), now: () => clock, dev });
+    const app = new Hono();
+    app.route("/api/auth", authRoutes(auth));
+    return { app };
+  }
+
+  test("prod: correct password with wrong code is 401", async () => {
+    const { app } = devApp(false);
+    await setupAndGetSecret(app);
+    expect((await post(app, "/api/auth/login", { password: PASSWORD, code: "000000" })).status).toBe(401);
+  });
+
+  test("dev: correct password with a wrong code or no code is 200", async () => {
+    const { app } = devApp(true);
+    await setupAndGetSecret(app);
+    expect((await post(app, "/api/auth/login", { password: PASSWORD, code: "000000" })).status).toBe(200);
+    expect((await post(app, "/api/auth/login", { password: PASSWORD })).status).toBe(200);
+  });
+
+  test("dev: wrong password is still 401", async () => {
+    const { app } = devApp(true);
+    await setupAndGetSecret(app);
+    expect((await post(app, "/api/auth/login", { password: "wrong-password-xx", code: "000000" })).status).toBe(401);
+  });
+
+  test("dev: rate limit still applies", async () => {
+    const { app } = devApp(true);
+    await setupAndGetSecret(app);
+    for (let i = 0; i < 5; i++) {
+      await post(app, "/api/auth/login", { password: "bad" });
+    }
+    expect((await post(app, "/api/auth/login", { password: PASSWORD })).status).toBe(429);
+  });
+
+  test("dev: password minimum length still applies", async () => {
+    const { app } = devApp(true);
+    expect((await post(app, "/api/auth/setup", { password: "abcd" })).status).toBe(400);
+  });
+
+  test("dev: status reports dev true", async () => {
+    const { app } = devApp(true);
+    const status = (await (await app.request("/api/auth/status")).json()) as { dev: boolean };
+    expect(status.dev).toBe(true);
   });
 });
 

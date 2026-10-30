@@ -14,7 +14,7 @@ let infra: string;
 beforeEach(async () => {
   db = openDb(":memory:");
   infra = await mkdtemp(join(tmpdir(), "sysadm-materialize-"));
-  for (const id of ["linux-common", "debian-ubuntu", "proxmox", "windows-server", "ops"]) {
+  for (const id of ["linux-common", "linux-virtualization", "proxmox", "windows-server", "powershell-windows", "ops"]) {
     db.run("INSERT INTO skills (id, name, description, content, builtin) VALUES (?, ?, 'd', ?, 1)", [
       id,
       id,
@@ -40,7 +40,7 @@ const vm = (parentId: string, name: string, extra: Partial<NodeInput> = {}) =>
 
 const read = (nodeId: string, file: string) => readFile(join(nodeDir(infra, nodeId), file), "utf8");
 
-test("a proxmox vm gets the three os skills and no credential or ssh user", async () => {
+test("a proxmox vm gets its os skills and no credential or ssh user", async () => {
   const root = company("Acme", { notes: "COMPANY-NOTE" });
   updateNode(db, root.id, { credentialId: "cred-1", user: "SSH-USER-SECRET" });
   const host = vm(root.id, "pve-07", { os: "proxmox" });
@@ -52,7 +52,7 @@ test("a proxmox vm gets the three os skills and no credential or ssh user", asyn
   expect(agents).not.toContain("CRED-NAME-SECRET");
   expect(agents).not.toContain("SSH-USER-SECRET");
 
-  for (const skill of ["linux-common", "debian-ubuntu", "proxmox"]) {
+  for (const skill of ["linux-common", "linux-virtualization", "proxmox"]) {
     expect(await read(host.id, `.opencode/skills/${skill}/SKILL.md`)).toContain(`body of ${skill}`);
   }
 });

@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDb } from "./db";
+import { openDb, SCHEMA_VERSION } from "./db";
 import { createToken, listTokens, revokeToken, verifyToken } from "./tokens";
 
 let dir: string;
@@ -65,13 +65,13 @@ test("last_used_at is written at most once a minute", () => {
   expect(listTokens(db).find((t) => t.id === id)!.lastUsedAt).toBe(170_000);
 });
 
-test("database at user_version 1 migrates to 2 and gets api_tokens", () => {
+test("database at user_version 1 migrates to the latest and gets api_tokens", () => {
   db.close();
   const path = join(dir, "db.sqlite");
   db = openDb(path);
-  db.exec("DROP TABLE api_tokens; PRAGMA user_version = 1;");
+  db.exec("DROP TABLE node_facts; DROP TABLE api_tokens; ALTER TABLE skills DROP COLUMN source; ALTER TABLE tasks DROP COLUMN archived_at; PRAGMA user_version = 1;");
   db.close();
   db = openDb(path);
-  expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()!.user_version).toBe(2);
+  expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()!.user_version).toBe(SCHEMA_VERSION);
   expect(db.query("SELECT name FROM sqlite_master WHERE name = 'api_tokens'").get()).not.toBeNull();
 });

@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { SCHEMA_VERSION } from "../db";
 import { audit } from "../guard";
 import type { Log, LogLevel, LogSource } from "../log";
+import type { OpencodeInstaller } from "../opencode-install";
 import type { OpencodeProc } from "../opencode-proc";
 import { createToken, listTokens, revokeToken } from "../tokens";
 
@@ -10,14 +11,15 @@ export interface SystemDeps {
   db: Database;
   log: Log;
   proc: Pick<OpencodeProc, "status" | "restart">;
+  installer?: OpencodeInstaller;
   startedAt: number;
   version: string;
 }
 
 const SOURCES: LogSource[] = ["app", "opencode"];
-const LEVELS: LogLevel[] = ["info", "warn", "error"];
+const LEVELS: LogLevel[] = ["debug", "info", "warn", "error"];
 
-export function systemRoutes({ db, log, proc, startedAt, version }: SystemDeps): Hono {
+export function systemRoutes({ db, log, proc, installer, startedAt, version }: SystemDeps): Hono {
   const app = new Hono();
 
   app.get("/api/system/health", (c) => {
@@ -64,6 +66,26 @@ export function systemRoutes({ db, log, proc, startedAt, version }: SystemDeps):
     await proc.restart();
     audit(db, { actor: c.get("actor"), action: "opencode_restart" });
     return c.json({ ok: true });
+  });
+
+  // ?refresh=1 asks npm right away instead of using the 6-hour cache.
+  app.get("/api/system/opencode/version", async (c) => {
+    if (!installer) return c.json({ error: "opencode installer is not configured" }, 404);
+    return c.json(await installer.info(c.req.query("refresh") === "1"));
+  });
+
+  app.post("/api/system/opencode/upgrade", async (c) => {
+    if (!installer) return c.json({ error: "opencode installer is not configured" }, 404);
+    const before = await installer.info();
+    if (before.busy) return c.json({ error: "установка opencode уже идёт" }, 409);
+    if (before.mode === "external") return c.json({ error: "opencode задан через OPENCODE_BIN и обновляется там, откуда установлен" }, 409);
+    const actor = c.get("actor");
+    // Download + restart outlive a proxy timeout, so it runs in the background; the UI polls GET .../version.
+    void installer.upgrade(proc).then(
+      (after) => audit(db, { actor, action: "opencode_upgrade", detail: { from: before.current, to: after.current } }),
+      (e: unknown) => audit(db, { actor, action: "opencode_upgrade", detail: { from: before.current, error: e instanceof Error ? e.message : String(e) } }),
+    );
+    return c.json({ ...before, busy: true }, 202);
   });
 
   // The raw token is returned once, here; afterwards only metadata is readable.

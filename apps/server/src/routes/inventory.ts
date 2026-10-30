@@ -1,9 +1,12 @@
 import type { Database } from "bun:sqlite";
 import { Hono, type Context } from "hono";
 import type { JumpMode, NodeKind, OsKind, ShellKind } from "@sysadm/shared";
+import { getFacts } from "../facts";
 import { audit } from "../guard";
 import { createNode, deleteNode, getNode, getTree, moveNode, resolveEffective, setNodeSkills, updateNode, type NodePatch } from "../inventory";
-import { materializeSubtree, removeNode } from "../materialize";
+import { join } from "node:path";
+import { materializeSubtree, nodeDir, removeNode } from "../materialize";
+import { parseRepo, scanRepo } from "../skills-github";
 import { applyAutopilot, AUTOPILOT_MS, type TaskDeps } from "./tasks";
 
 const KINDS: NodeKind[] = ["company", "group", "hypervisor", "vm"];
@@ -15,6 +18,8 @@ const SKILL_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export interface InventoryDeps extends TaskDeps {
   bus?: { publish(message: { type: string; [key: string]: unknown }): void };
+  fetch?: typeof fetch;
+  githubToken?: string;
 }
 
 type Body = Record<string, unknown>;
@@ -69,12 +74,20 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
     const node = getNode(db, c.req.param("id"));
     if (!node) return c.json({ error: "not found" }, 404);
     try {
-      return c.json({ node, effective: resolveEffective(db, node.id), routeError: null });
+      return c.json({ node, effective: resolveEffective(db, node.id), routeError: null, facts: getFacts(db, node.id) });
     } catch (err) {
       const code = err instanceof Error ? err.message : "";
       if (!code.startsWith("JUMP_")) throw err;
-      return c.json({ node, effective: null, routeError: code });
+      return c.json({ node, effective: null, routeError: code, facts: getFacts(db, node.id) });
     }
+  });
+
+  // The file the agent actually reads: inherited notes and route, as materialized on disk.
+  app.get("/api/nodes/:id/agents-md", async (c) => {
+    const id = c.req.param("id");
+    if (!getNode(db, id)) return c.json({ error: "not found" }, 404);
+    const file = Bun.file(join(nodeDir(infraDir, id), "AGENTS.md"));
+    return c.json({ content: (await file.exists()) ? await file.text() : "" });
   });
 
   app.post("/api/nodes", async (c) => {
@@ -111,7 +124,8 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
 
   app.patch("/api/nodes/:id", async (c) => {
     const id = c.req.param("id");
-    if (!getNode(db, id)) return c.json({ error: "not found" }, 404);
+    const before = getNode(db, id);
+    if (!before) return c.json({ error: "not found" }, 404);
     const body = await readBody(c);
     if (!body) return c.json({ error: "body must be an object" }, 400);
     const patch: NodePatch = {};
@@ -140,7 +154,9 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
 
     try {
       const node = updateNode(db, id, patch);
-      audit(db, { actor: c.get("actor"), action: "node_update", nodeId: id, detail: { fields: Object.keys(patch) } });
+      // A rename keeps both names in the audit, so a typo can be traced and undone.
+      const renamed = patch.name !== undefined && patch.name !== before.name ? { from: before.name, to: patch.name } : {};
+      audit(db, { actor: c.get("actor"), action: "node_update", nodeId: id, detail: { fields: Object.keys(patch), ...renamed } });
       if (typeof body.autopilot === "boolean") {
         await applyAutopilot(deps, id);
         audit(db, { actor: c.get("actor"), action: body.autopilot ? "autopilot_on" : "autopilot_off", nodeId: id });
@@ -205,8 +221,77 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
   });
 
   app.get("/api/skills", (c) =>
-    c.json(db.query<{ id: string; name: string; description: string; builtin: number }, []>("SELECT id, name, description, builtin FROM skills ORDER BY id").all()),
+    c.json(
+      db
+        .query<{ id: string; name: string; description: string; content: string; builtin: number; source: string | null }, []>(
+          "SELECT id, name, description, content, builtin, source FROM skills ORDER BY id",
+        )
+        .all(),
+    ),
   );
+
+  const scan = async (c: Context) => {
+    const body = await readBody(c);
+    if (typeof body?.repo !== "string") return { error: c.json({ error: "repo is required" }, 400) };
+    let spec;
+    try {
+      spec = parseRepo(body.repo);
+    } catch {
+      return { error: c.json({ error: "ожидается owner/repo или ссылка на github.com" }, 400) };
+    }
+    if (typeof body.ref === "string" && body.ref) spec.ref = body.ref;
+    try {
+      const result = await scanRepo(deps.fetch ?? fetch, { ...spec, githubToken: deps.githubToken });
+      return { body, spec, ...result };
+    } catch (err) {
+      return { error: c.json({ error: err instanceof Error ? err.message : "scan failed" }, 502) };
+    }
+  };
+
+  app.post("/api/skills/github/scan", async (c) => {
+    const r = await scan(c);
+    if ("error" in r) return r.error;
+    const has = db.query<{ id: string }, [string]>("SELECT id FROM skills WHERE id = ?");
+    return c.json({
+      owner: r.spec.owner,
+      repo: r.spec.repo,
+      ref: r.ref,
+      skills: r.skills.map(({ path, id, name, description }) => ({ path, id, name, description, exists: !!has.get(id) })),
+    });
+  });
+
+  // Installs the chosen paths. A builtin or a hand-made skill with the same id is never overwritten;
+  // a skill installed earlier from GitHub is updated in place.
+  app.post("/api/skills/github/install", async (c) => {
+    const r = await scan(c);
+    if ("error" in r) return r.error;
+    const paths = r.body.paths;
+    if (!Array.isArray(paths) || !paths.every((p): p is string => typeof p === "string")) {
+      return c.json({ error: "paths must be an array of strings" }, 400);
+    }
+    const installed: string[] = [];
+    const updated: string[] = [];
+    const skipped: Array<{ id: string; reason: string }> = [];
+    for (const skill of r.skills.filter((s) => paths.includes(s.path))) {
+      const source = `github:${r.spec.owner}/${r.spec.repo}@${r.ref}:${skill.path}`;
+      const row = db.query<{ source: string | null }, [string]>("SELECT source FROM skills WHERE id = ?").get(skill.id);
+      if (!row) {
+        db.run("INSERT INTO skills (id, name, description, content, builtin, source) VALUES (?, ?, ?, ?, 0, ?)", [
+          skill.id, skill.name, skill.description, skill.content, source,
+        ]);
+        installed.push(skill.id);
+      } else if (row.source?.startsWith("github:")) {
+        db.run("UPDATE skills SET name = ?, description = ?, content = ?, source = ? WHERE id = ?", [
+          skill.name, skill.description, skill.content, source, skill.id,
+        ]);
+        updated.push(skill.id);
+      } else {
+        skipped.push({ id: skill.id, reason: "уже есть локальный скил с таким id" });
+      }
+    }
+    audit(db, { actor: c.get("actor"), action: "skill_install", detail: { repo: `${r.spec.owner}/${r.spec.repo}`, ref: r.ref, installed, updated } });
+    return c.json({ installed, updated, skipped });
+  });
 
   app.post("/api/skills", async (c) => {
     const body = await readBody(c);
@@ -223,12 +308,12 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
     const id = c.req.param("id");
     const row = db.query<{ builtin: number }, [string]>("SELECT builtin FROM skills WHERE id = ?").get(id);
     if (!row) return c.json({ error: "not found" }, 404);
-    if (row.builtin === 1) return c.json({ error: "builtin skills are read-only" }, 403);
     const body = await readBody(c);
     if (typeof body?.name !== "string" || typeof body?.description !== "string" || typeof body?.content !== "string") {
       return c.json({ error: "name, description, content are required" }, 400);
     }
-    db.run("UPDATE skills SET name = ?, description = ?, content = ? WHERE id = ?", [body.name, body.description, body.content, id]);
+    // An edited builtin becomes the admin's own: syncBuiltinSkills no longer overwrites it; deleting it restores the original on restart.
+    db.run("UPDATE skills SET name = ?, description = ?, content = ?, builtin = 0 WHERE id = ?", [body.name, body.description, body.content, id]);
     audit(db, { actor: c.get("actor"), action: "skill_update", detail: { id } });
     return c.json({ id });
   });

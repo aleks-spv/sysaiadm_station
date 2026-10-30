@@ -6,6 +6,8 @@ import checker from "vite-plugin-checker";
 export default defineConfig({
   resolve: {
     alias: { "@": new URL("./src", import.meta.url).pathname },
+    // Plugin pages in <repo>/plugins/*/web have their own node_modules; one React for the whole app.
+    dedupe: ["react", "react-dom", "react-router"],
   },
   plugins: [
     react(),

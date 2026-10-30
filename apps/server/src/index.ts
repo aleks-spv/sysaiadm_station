@@ -1,23 +1,35 @@
 import type { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { serveStatic } from "hono/bun";
-import { createAuth, authRoutes, requireAuth } from "./auth";
+import { websocket } from "hono/bun";
+import { HTTPException } from "hono/http-exception";
+import { createAuth, authRoutes, isHttps, requireAuth } from "./auth";
 import { openDb } from "./db";
+import { commandsRoutes } from "./routes/commands";
+import { factsRoutes } from "./routes/facts";
 import { createInternalApp } from "./routes/internal";
 import { inventoryRoutes } from "./routes/inventory";
 import { credentialsRoutes } from "./routes/credentials";
+import { backupRoutes, startBackups } from "./backup";
+import { exportRoutes } from "./routes/export";
 import { importRoutes } from "./routes/import";
-import { startAutopilotExpiry, tasksRoutes } from "./routes/tasks";
+import { startArchivePurge, startAutopilotExpiry, tasksRoutes } from "./routes/tasks";
 import { createBus, eventsRoutes, startEventBridge } from "./routes/events";
 import { systemRoutes } from "./routes/system";
 import { materializeAll } from "./materialize";
 import { makeClient, type OpenCodeClient } from "./opencode";
-import { startOpencode, writeOpencodeConfig, type OpencodeProc } from "./opencode-proc";
-import { createLog, type Log } from "./log";
+import { createOpencodeInstaller, type OpencodeInstaller } from "./opencode-install";
+import { frontmatter } from "./skills-github";
+import { startOpencode, type OpencodeProc } from "./opencode-proc";
+import { buildOpencodeConfig, getOverlay, writeOpencodeConfig, type Overlay } from "./opencode-config";
+import { opencodeSettingsRoutes } from "./routes/opencode-settings";
+import { createPluginHost } from "./plugins/host";
+import { PLUGINS } from "./plugins";
+import { createLog, parseLevel, type Log, type LogLevel } from "./log";
 import { loadMasterKey } from "./vault";
 
 const MAX_BODY = 1024 * 1024;
@@ -28,14 +40,20 @@ export interface Config {
   masterKey: Buffer;
   infraDir: string;
   dbPath: string;
+  // Plugin files live under <dataDir>/plugins/<id>.
+  dataDir: string;
   skillsDir: string;
   webDist: string;
   publicPort: number;
   internalPort: number;
-  opencodeBin: string;
+  // Set only for a self-managed binary (dev); otherwise opencode is installed into <opencodeHome>/bin.
+  opencodeBin?: string;
   opencodePort: number;
   opencodeHome: string;
   pluginPath: string;
+  devMode: boolean;
+  // Raises the GitHub API limit for skill installs; optional.
+  githubToken?: string;
 }
 
 // Secrets generated on every start; they never reach the .env file.
@@ -44,6 +62,7 @@ export interface Runtime {
   opencodePassword: string;
   log: Log;
   proc: Pick<OpencodeProc, "status" | "restart">;
+  installer?: OpencodeInstaller;
 }
 
 export class ConfigError extends Error {}
@@ -73,19 +92,26 @@ export function readConfig(env: Record<string, string | undefined>): Config {
   } catch (err) {
     problems.push(err instanceof Error ? err.message : "SYSADM_MASTER_KEY is invalid");
   }
+  // Typos must fail here: an unrecognised value silently running as prod would hide the intent.
+  if (env.SYSADM_ENV && env.SYSADM_ENV !== "dev" && env.SYSADM_ENV !== "prod") {
+    problems.push(`SYSADM_ENV must be "dev" or "prod"`);
+  }
   if (problems.length > 0 || masterKey === undefined) throw new ConfigError(problems.join("\n"));
   return {
     masterKey,
     infraDir,
     dbPath,
+    dataDir: env.DATA_DIR ?? dirname(dbPath),
+    githubToken: env.GITHUB_TOKEN || undefined,
     skillsDir: env.SKILLS_DIR ?? "/app/skills",
     webDist: env.WEB_DIST ?? "apps/web/dist",
     publicPort,
     internalPort,
-    opencodeBin: env.OPENCODE_BIN ?? "opencode",
+    opencodeBin: env.OPENCODE_BIN || undefined,
     opencodePort,
     opencodeHome: env.OPENCODE_HOME ?? "/data/opencode",
     pluginPath: env.PLUGIN_PATH ?? "/app/packages/plugin",
+    devMode: env.SYSADM_ENV === "dev",
   };
 }
 
@@ -93,13 +119,16 @@ export function readConfig(env: Record<string, string | undefined>): Config {
 export function syncBuiltinSkills(db: Database, skillsDir: string): number {
   if (!existsSync(skillsDir)) return 0;
   let count = 0;
+  const shipped: string[] = [];
   for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const file = join(skillsDir, entry.name, "SKILL.md");
     if (!existsSync(file)) continue;
+    shipped.push(entry.name);
     const content = readFileSync(file, "utf8");
-    const name = /^name:\s*(.+)$/m.exec(content)?.[1]?.trim() ?? entry.name;
-    const description = /^description:\s*(.+)$/m.exec(content)?.[1]?.trim() ?? "";
+    const meta = frontmatter(content);
+    const name = meta.name || entry.name;
+    const description = meta.description;
     db.run(
       `INSERT INTO skills (id, name, description, content, builtin) VALUES (?, ?, ?, ?, 1)
        ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, content = excluded.content
@@ -108,6 +137,12 @@ export function syncBuiltinSkills(db: Database, skillsDir: string): number {
     );
     count++;
   }
+  // A built-in dropped from the image goes away too; one the admin edited (builtin = 0) stays.
+  const stale = `SELECT id FROM skills WHERE builtin = 1 AND id NOT IN (${shipped.map(() => "?").join(",") || "''"})`;
+  db.transaction(() => {
+    db.run(`DELETE FROM node_skills WHERE skill_id IN (${stale})`, shipped);
+    db.run(`DELETE FROM skills WHERE id IN (${stale})`, shipped);
+  })();
   return count;
 }
 
@@ -121,26 +156,33 @@ export interface BuiltApp {
   publicApp: Hono;
   internalApp: Hono;
   db: Database;
-  stop: () => void;
+  stop: () => Promise<void>;
 }
 
 export async function buildApp(config: Config, options: { background: boolean; runtime: Runtime }): Promise<BuiltApp> {
   const { runtime } = options;
   const db = openDb(config.dbPath);
-  const auth = createAuth({ db, masterKey: config.masterKey });
+  const auth = createAuth({ db, masterKey: config.masterKey, dev: config.devMode });
   const client: OpenCodeClient = makeClient({
     baseUrl: `http://127.0.0.1:${config.opencodePort}`,
     password: runtime.opencodePassword,
   });
   const bus = createBus();
   syncBuiltinSkills(db, config.skillsDir);
+  const base = JSON.parse(readFileSync(new URL("../opencode.base.json", import.meta.url), "utf8")) as Record<string, unknown>;
+  const applyOverlay = (overlay: Overlay) => writeOpencodeConfig(config.infraDir, buildOpencodeConfig(base, config.pluginPath, overlay));
+  applyOverlay(getOverlay(db));
   await materializeAll(db, config.infraDir);
   const taskDeps = { db, client, infraDir: config.infraDir };
 
-  const stops: Array<() => void> = [];
+  const stops: Array<() => void | Promise<void>> = [];
+  const plugins = createPluginHost({ db, masterKey: config.masterKey, dataDir: config.dataDir, log: runtime.log, plugins: PLUGINS, background: options.background, taskDeps });
+  stops.push(plugins.stop);
   if (options.background) {
     stops.push(startAutopilotExpiry(taskDeps));
+    stops.push(startArchivePurge(taskDeps));
     stops.push(startEventBridge({ db, client, bus }));
+    stops.push(startBackups(db, join(config.dataDir, "backups"), (level, line) => runtime.log.write("app", level, line)));
   }
 
   const app = new Hono();
@@ -148,9 +190,28 @@ export async function buildApp(config: Config, options: { background: boolean; r
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) c.header(name, value);
     await next();
   });
+  // Health and the SSE stream poll constantly; logging them would bury everything else.
+  app.use("*", async (c, next) => {
+    const start = Date.now();
+    await next();
+    const path = c.req.path;
+    if (path === "/api/health" || path === "/api/events") return;
+    const status = c.res.status;
+    const isLogin = c.req.method === "POST" && path === "/api/auth/login";
+    const level: LogLevel = status >= 500 ? "error" : isLogin ? "info" : status >= 400 ? "warn" : "debug";
+    runtime.log.write("app", level, `${c.req.method} ${path} ${status} ${Date.now() - start}ms actor=${c.get("actor") ?? "-"}`);
+    if (isLogin && status === 200 && !isHttps(c)) {
+      runtime.log.write("app", "warn", "login over HTTP: session cookie is sent without Secure, use HTTPS");
+    }
+  });
+  app.onError((err, c) => {
+    if (err instanceof HTTPException) return err.getResponse();
+    runtime.log.write("app", "error", `unhandled ${c.req.method} ${c.req.path}: ${err.message}\n${err.stack ?? ""}`);
+    return c.json({ error: "internal error" }, 500);
+  });
   const limitDefault = bodyLimit({ maxSize: MAX_BODY, onError: (c) => c.json({ error: "payload too large" }, 413) });
   const limitImport = bodyLimit({ maxSize: MAX_IMPORT_BODY, onError: (c) => c.json({ error: "payload too large" }, 413) });
-  app.use("*", (c, next) => (c.req.path === "/api/import/preview" ? limitImport(c, next) : limitDefault(c, next)));
+  app.use("*", (c, next) => (c.req.path === "/api/import/preview" || c.req.path === "/api/inventory/import" ? limitImport(c, next) : limitDefault(c, next)));
 
   app.get("/api/health", (c) => {
     try {
@@ -167,24 +228,30 @@ export async function buildApp(config: Config, options: { background: boolean; r
     if (c.req.path.startsWith("/api/auth/") || c.req.path === "/api/health") return next();
     return guard(c, next);
   });
-  app.route("/", inventoryRoutes({ ...taskDeps, bus }));
+  app.route("/", inventoryRoutes({ ...taskDeps, bus, githubToken: config.githubToken }));
   app.route("/", credentialsRoutes(db, config.masterKey));
+  app.route("/", commandsRoutes(db));
+  app.route("/", factsRoutes({ db, masterKey: config.masterKey, infraDir: config.infraDir, bus }));
   app.route("/", importRoutes({ db, infraDir: config.infraDir }));
+  app.route("/", backupRoutes(db, join(config.dataDir, "backups")));
+  app.route("/", exportRoutes({ db, masterKey: config.masterKey, infraDir: config.infraDir }));
   app.route("/", tasksRoutes(taskDeps));
   app.route("/", eventsRoutes(bus));
-  app.route("/", systemRoutes({ db, log: runtime.log, proc: runtime.proc, startedAt: Date.now(), version: VERSION }));
+  app.route("/", opencodeSettingsRoutes({ db, client, apply: applyOverlay }));
+  app.route("/", plugins.app);
+  app.route("/", systemRoutes({ db, log: runtime.log, proc: runtime.proc, installer: runtime.installer, startedAt: Date.now(), version: VERSION }));
   app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
   app.get("*", serveStatic({ root: config.webDist }), serveStatic({ root: config.webDist, path: "index.html" }));
 
-  const internalApp = createInternalApp({ db, token: runtime.internalToken, masterKey: config.masterKey });
+  const internalApp = createInternalApp({ db, token: runtime.internalToken, masterKey: config.masterKey, filterOutput: plugins.filterOutput });
 
   return {
     publicApp: app,
     internalApp,
     db,
-    stop: () => {
-      for (const stop of stops) stop();
+    stop: async () => {
+      for (const stop of stops) await stop();
       db.close();
     },
   };
@@ -200,26 +267,40 @@ if (import.meta.main) {
   }
   const internalToken = randomBytes(32).toString("hex");
   const opencodePassword = randomBytes(32).toString("hex");
-  const log = createLog({ secrets: [process.env.SYSADM_MASTER_KEY ?? "", internalToken, opencodePassword] });
+  const level = parseLevel(process.env.LOG_LEVEL);
+  const log = createLog({ secrets: [process.env.SYSADM_MASTER_KEY ?? "", internalToken, opencodePassword], minLevel: level ?? "info" });
+  if (level === null) log.write("app", "warn", `LOG_LEVEL=${process.env.LOG_LEVEL} is not recognised (debug, info, warn, error); using info`);
 
-  const base = JSON.parse(readFileSync(new URL("../opencode.base.json", import.meta.url), "utf8")) as Record<string, unknown>;
-  writeOpencodeConfig(config.infraDir, config.pluginPath, base);
-  const proc = startOpencode({
-    bin: config.opencodeBin,
+  // buildApp writes opencode.json, so the child starts after it; status/restart reach the child through this holder.
+  let proc: OpencodeProc | undefined;
+  const procRef = { status: () => proc!.status(), restart: () => proc!.restart() };
+  const installer = createOpencodeInstaller({
+    home: config.opencodeHome,
+    external: config.opencodeBin,
+    log: (level, line) => log.write("app", level, line),
+  });
+  const built = await buildApp(config, { background: true, runtime: { internalToken, opencodePassword, log, proc: procRef, installer } });
+  // First start on an empty volume downloads opencode; on failure the child backs off until the admin installs it.
+  await installer.ensure();
+  proc = startOpencode({
+    bin: installer.bin,
     port: config.opencodePort,
     home: config.opencodeHome,
     infraDir: config.infraDir,
     internalUrl: `http://127.0.0.1:${config.internalPort}`,
     internalToken,
     password: opencodePassword,
-    onLine: (source, line) => log.write(source, "info", line),
+    onLine: (source, line, level) => log.write(source, level, line),
   });
 
-  const built = await buildApp(config, { background: true, runtime: { internalToken, opencodePassword, log, proc } });
-  const publicServer = Bun.serve({ port: config.publicPort, fetch: built.publicApp.fetch });
+  // websocket: plugin routes upgraded with ctx.upgradeWebSocket (terminal).
+  const publicServer = Bun.serve({ port: config.publicPort, fetch: built.publicApp.fetch, websocket });
   // Internal API: loopback only. The opencode plugin reaches it from the child process.
   const internalServer = Bun.serve({ hostname: "127.0.0.1", port: config.internalPort, fetch: built.internalApp.fetch });
-  log.write("app", "info", `sysadm listening on :${config.publicPort} (public) and 127.0.0.1:${config.internalPort} (internal)`);
+  log.write("app", "info", `SysAiAdm Station listening on :${config.publicPort} (public) and 127.0.0.1:${config.internalPort} (internal)`);
+  // Error level on purpose: it passes any LOG_LEVEL threshold, so the warning cannot be silenced.
+  if (config.devMode) log.write("app", "error", "SYSADM_ENV=dev: TOTP code check is disabled, password is the only factor");
+  log.write("app", "info", `log level: ${level ?? "info"}`);
 
   let shuttingDown = false;
   const shutdown = async () => {
@@ -227,8 +308,8 @@ if (import.meta.main) {
     shuttingDown = true;
     publicServer.stop();
     internalServer.stop();
-    await proc.stop();
-    built.stop();
+    await proc?.stop();
+    await built.stop();
     process.exitCode = 0;
   };
   process.on("SIGTERM", () => void shutdown());

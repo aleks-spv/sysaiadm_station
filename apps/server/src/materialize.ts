@@ -1,7 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { mkdir, readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { EffectiveNode, InventoryNode, OsKind, ShellKind } from "@sysadm/shared";
+import type { EffectiveNode, InventoryNode, NodeFacts, OsKind, ShellKind } from "@sysadm/shared";
+import { factsMarkdown, getFacts } from "./facts";
 import { dependentsOfJump, descendants, getNode, getTree, resolveEffective } from "./inventory";
 
 const JUMP_ERRORS = ["JUMP_CYCLE", "JUMP_TOO_DEEP", "JUMP_NO_ADDRESS"];
@@ -49,6 +50,7 @@ function agentsMd(
   byId: Map<string, InventoryNode>,
   eff: EffectiveNode | null,
   routeError: string | null,
+  facts: NodeFacts | null,
 ): string {
   const address = eff?.address || node.address || "не задан";
   const shell = eff?.shell ?? node.shell ?? defaultShell(node.os);
@@ -59,6 +61,7 @@ function agentsMd(
     route = `через бастион ${bastions.join(" → ")}`;
   } else route = "напрямую";
   const notes = eff?.notesChain.length ? eff.notesChain.join("\n\n") : "нет";
+  const card = facts ? ["", factsMarkdown(facts)] : [];
 
   return [
     `Ты сисадмин-агент. Сервер этой сессии: ${node.name}, ${address}, ОС ${node.os}, оболочка ${shell}.`,
@@ -66,6 +69,7 @@ function agentsMd(
     "Команды выполняй только инструментом `remote_exec`. Локальной машины нет.",
     "",
     `Путь в дереве: ${treePath(byId, node.id).join(" / ")}`,
+    ...card,
     "",
     "## Заметки",
     notes,
@@ -98,7 +102,7 @@ export async function materializeNode(db: Database, infraDir: string, nodeId: st
   }
 
   const dir = nodeDir(infraDir, nodeId);
-  await writeAtomic(join(dir, "AGENTS.md"), agentsMd(node, byId, eff, routeError));
+  await writeAtomic(join(dir, "AGENTS.md"), agentsMd(node, byId, eff, routeError, getFacts(db, nodeId)));
   const skillsRoot = join(dir, ".opencode", "skills");
   for (const [skillId, content] of skills) {
     await writeAtomic(join(skillsRoot, skillId, "SKILL.md"), content);

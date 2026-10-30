@@ -9,8 +9,8 @@
 1. `docker compose build`
    Ожидается: сборка завершается без ошибок.
    результат: ___
-2. `docker compose run --rm --no-deps sysadm sh -c 'command -v opencode && opencode --version && id -u'`
-   Ожидается: путь `/usr/local/bin/opencode`, версия `2.2.0`, uid `1000`.
+2. `docker compose up -d`, затем `docker compose exec sysadm sh -c '/data/opencode/bin/opencode --version && id -u'`
+   Ожидается: при первом запуске сервер сам скачал opencode в volume (в логе `installing opencode 2.x.y`), версия последняя 2.x, uid `1000`.
    результат: ___
 3. `docker compose run --rm --no-deps sysadm test -r /app/packages/plugin/src/index.ts && echo plugin-ok`
    Ожидается: строка `plugin-ok`.

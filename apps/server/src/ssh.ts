@@ -144,10 +144,56 @@ function runCommand(client: Client, command: string): Promise<Omit<ExecOutput, "
   });
 }
 
+// Dials every hop through the previous one; `until` lets the caller abort a hanging step.
+async function connectChain(hops: Hop[], clients: Client[], until: <T>(work: Promise<T>) => Promise<T>) {
+  const hostKeys: string[] = [];
+  let previous: Client | undefined;
+  for (const [i, hop] of hops.entries()) {
+    let sock: Readable | undefined;
+    if (previous) {
+      sock = await until(
+        forward(previous, hop.host, hop.port).catch((err: Error) => {
+          throw new SshHopError(i, err.message);
+        }),
+      );
+    }
+    const connected = await until(connectHop(hop, i, sock, clients));
+    hostKeys.push(connected.hostKey);
+    previous = connected.client;
+  }
+  if (!previous) throw new Error("NO_HOPS");
+  return { target: previous, hostKeys };
+}
+
+export interface ShellSession {
+  stream: ClientChannel;
+  hostKeys: string[];
+  resize(cols: number, rows: number): void;
+  close(): void;
+}
+
+// Interactive PTY for a human admin (terminal plugin). The caller pins hostKeys and owns close().
+export async function openShell(input: { hops: Hop[]; cols: number; rows: number }): Promise<ShellSession> {
+  const clients: Client[] = [];
+  const close = () => {
+    for (const client of [...clients].reverse()) client.end();
+  };
+  try {
+    const { target, hostKeys } = await connectChain(input.hops, clients, (work) => work);
+    const stream = await new Promise<ClientChannel>((resolve, reject) =>
+      target.shell({ term: "xterm-256color", cols: input.cols, rows: input.rows }, (err, channel) => (err ? reject(err) : resolve(channel))),
+    );
+    stream.on("close", close);
+    return { stream, hostKeys, resize: (cols, rows) => stream.setWindow(rows, cols, 0, 0), close };
+  } catch (err) {
+    close();
+    throw err;
+  }
+}
+
 // Connect-per-exec: every hop is dialed fresh, pinned to its own host key, and torn down after.
 export async function execRemote(input: ExecInput): Promise<ExecOutput> {
   const clients: Client[] = [];
-  const hostKeys: string[] = [];
   let aborted = false;
   let timedOut = false;
   let stopWith: (err: Error) => void = () => {};
@@ -170,22 +216,8 @@ export async function execRemote(input: ExecInput): Promise<ExecOutput> {
   input.signal?.addEventListener("abort", abort, { once: true });
 
   try {
-    let previous: Client | undefined;
-    for (const [i, hop] of input.hops.entries()) {
-      let sock: Readable | undefined;
-      if (previous) {
-        sock = await until(
-          forward(previous, hop.host, hop.port).catch((err: Error) => {
-            throw new SshHopError(i, err.message);
-          }),
-        );
-      }
-      const connected = await until(connectHop(hop, i, sock, clients));
-      hostKeys.push(connected.hostKey);
-      previous = connected.client;
-    }
-    if (!previous) throw new Error("NO_HOPS");
-    const result = await until(runCommand(previous, toExecCommand(input.shell, input.command)));
+    const { target, hostKeys } = await connectChain(input.hops, clients, until);
+    const result = await until(runCommand(target, toExecCommand(input.shell, input.command)));
     return { ...result, hostKeys };
   } catch (err) {
     if (timedOut) throw new Error("EXEC_TIMEOUT");

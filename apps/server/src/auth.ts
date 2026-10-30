@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { createMiddleware } from "hono/factory";
 import * as OTPAuth from "otpauth";
@@ -13,6 +13,10 @@ const RATE_WINDOW_MS = 15 * 60 * 1000;
 const RATE_MAX_FAILS = 5;
 const MIN_PASSWORD = 12;
 const COOKIE = "sid";
+
+// Scheme of the request as the client saw it: behind a TLS proxy the header wins over the local URL.
+export const isHttps = (c: Context) =>
+  (c.req.header("x-forwarded-proto")?.split(",")[0].trim() ?? new URL(c.req.url).protocol.replace(":", "")) === "https";
 
 export class AuthError extends Error {
   constructor(
@@ -30,9 +34,10 @@ export interface AuthDeps {
   db: Database;
   masterKey: Buffer;
   now?: () => number;
+  dev?: boolean;
 }
 
-export function createAuth({ db, masterKey, now = Date.now }: AuthDeps) {
+export function createAuth({ db, masterKey, now = Date.now, dev = false }: AuthDeps) {
   const fails = new Map<string, number[]>();
 
   const recentFails = (ip: string): number[] => {
@@ -46,7 +51,7 @@ export function createAuth({ db, masterKey, now = Date.now }: AuthDeps) {
 
   const totpFor = (base32: string) =>
     new OTPAuth.TOTP({
-      issuer: "sysadm",
+      issuer: "SysAiAdm Station",
       label: "admin",
       algorithm: "SHA1",
       digits: 6,
@@ -87,7 +92,8 @@ export function createAuth({ db, masterKey, now = Date.now }: AuthDeps) {
     if (row) {
       const pwOk = await Bun.password.verify(password, row.password_hash);
       const secret = open(masterKey, { ciphertext: row.totp_secret_enc, iv: row.totp_iv, tag: row.totp_tag }, "totp").toString();
-      const codeOk = totpFor(secret).validate({ token: code, window: 1 }) !== null;
+      // shortcut: dev не проверяет код TOTP; снять вместе с переходом стенда на HTTPS.
+      const codeOk = dev || totpFor(secret).validate({ token: code, window: 1 }) !== null;
       ok = pwOk && codeOk;
     }
     if (!ok) {
@@ -119,7 +125,7 @@ export function createAuth({ db, masterKey, now = Date.now }: AuthDeps) {
     if (token) db.run("DELETE FROM auth_sessions WHERE id = ?", [hashToken(token)]);
   }
 
-  return { isSetup, setup, login, validate, logout };
+  return { isSetup, setup, login, validate, logout, dev };
 }
 
 export type Auth = ReturnType<typeof createAuth>;
@@ -146,10 +152,18 @@ export const ROUTE_SCOPES: RouteScope[] = [
   { method: "GET", pattern: "/api/credentials", scope: "read" },
   { method: "GET", pattern: "/api/settings/providers", scope: "read" },
   { method: "GET", pattern: "/api/settings/models", scope: "read" },
+  { method: "GET", pattern: "/api/settings/agents", scope: "read" },
+  { method: "GET", pattern: "/api/settings/integrations", scope: "read" },
+  { method: "GET", pattern: "/api/nodes/:id/agents-md", scope: "read" },
+  { method: "GET", pattern: "/api/commands", scope: "read" },
+  { method: "PUT", pattern: "/api/commands", scope: "admin" },
+  { method: "POST", pattern: "/api/nodes/:id/facts", scope: "tasks" },
   { method: "GET", pattern: "/api/system/health", scope: "read" },
   { method: "POST", pattern: "/api/nodes/:id/tasks", scope: "tasks" },
   { method: "POST", pattern: "/api/tasks/:id/prompt", scope: "tasks" },
   { method: "POST", pattern: "/api/tasks/:id/stop", scope: "tasks" },
+  { method: "POST", pattern: "/api/tasks/:id/archive", scope: "tasks" },
+  { method: "POST", pattern: "/api/tasks/:id/unarchive", scope: "tasks" },
   { method: "POST", pattern: "/api/tasks/:id/permissions/:requestID", scope: "approve" },
   { method: "GET", pattern: "/api/system/logs", scope: "logs" },
   { method: "POST", pattern: "/api/nodes", scope: "admin" },
@@ -168,6 +182,25 @@ export const ROUTE_SCOPES: RouteScope[] = [
   { method: "POST", pattern: "/api/import/apply", scope: "admin" },
   { method: "POST", pattern: "/api/settings/providers/:id/key", scope: "admin" },
   { method: "POST", pattern: "/api/system/opencode/restart", scope: "admin" },
+  { method: "POST", pattern: "/api/inventory/export", scope: "admin" },
+  { method: "POST", pattern: "/api/inventory/import", scope: "admin" },
+  { method: "GET", pattern: "/api/backups", scope: "admin" },
+  { method: "PUT", pattern: "/api/backups/settings", scope: "admin" },
+  { method: "POST", pattern: "/api/backups", scope: "admin" },
+  { method: "GET", pattern: "/api/backups/:name", scope: "admin" },
+  { method: "DELETE", pattern: "/api/backups/:name", scope: "admin" },
+  { method: "GET", pattern: "/api/system/opencode/version", scope: "read" },
+  { method: "POST", pattern: "/api/system/opencode/upgrade", scope: "admin" },
+  { method: "POST", pattern: "/api/skills/github/scan", scope: "admin" },
+  { method: "POST", pattern: "/api/skills/github/install", scope: "admin" },
+  { method: "GET", pattern: "/api/settings/hidden-models", scope: "read" },
+  { method: "PUT", pattern: "/api/settings/hidden-models", scope: "admin" },
+  { method: "GET", pattern: "/api/settings/opencode-plugins", scope: "read" },
+  // The overlay may hold provider settings typed by the admin, so reading it is admin-only too.
+  { method: "GET", pattern: "/api/settings/opencode-config", scope: "admin" },
+  { method: "PUT", pattern: "/api/settings/opencode-config", scope: "admin" },
+  { method: "GET", pattern: "/api/settings/task-retention", scope: "read" },
+  { method: "PUT", pattern: "/api/settings/task-retention", scope: "admin" },
 ];
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -207,7 +240,9 @@ export const requireAuth = (auth: Auth, db: Database) => {
         bearerFails.set(ip, [...recent, now]);
         return c.json({ error: "unauthorized" }, 401);
       }
-      const needed = c.req.path.startsWith("/api/tokens") ? null : matchRouteScope(c.req.method, c.req.path);
+      // Tokens and plugins are cookie-only: plugin routes are not in the scope map.
+      const cookieOnly = c.req.path.startsWith("/api/tokens") || c.req.path === "/api/plugins" || c.req.path.startsWith("/api/plugins/");
+      const needed = cookieOnly ? null : matchRouteScope(c.req.method, c.req.path);
       if (needed === null || !token.scopes.includes(needed)) return c.json({ error: "forbidden" }, 403);
       c.set("actor", `token:${token.name}`);
       c.set("scopes", token.scopes);
@@ -227,7 +262,7 @@ export function authRoutes(auth: Auth) {
   const app = new Hono();
 
   app.get("/status", (c) =>
-    c.json({ setup: auth.isSetup(), authed: auth.validate(getCookie(c, COOKIE)) }),
+    c.json({ setup: auth.isSetup(), authed: auth.validate(getCookie(c, COOKIE)), dev: auth.dev }),
   );
 
   app.post("/setup", async (c) => {
@@ -246,9 +281,11 @@ export function authRoutes(auth: Auth) {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     try {
       const token = await auth.login(body.password ?? "", body.code ?? "", ip);
+      // Browsers drop Secure cookies received over plain HTTP, so the flag follows the request scheme.
+      // shortcut: по HTTP cookie идёт без Secure и перехватываема; убрать ветку, когда HTTPS станет обязательным.
       setCookie(c, COOKIE, token, {
         httpOnly: true,
-        secure: true,
+        secure: isHttps(c),
         sameSite: "Strict",
         path: "/",
         maxAge: SESSION_TTL_MS / 1000,

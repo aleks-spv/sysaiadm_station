@@ -1,0 +1,17 @@
+{
+  "name": "@sysadm-plugins/rtk",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "description": "SysAiAdm Station plugin: compresses command output before the model reads it (rtk filters + built-in compaction)",
+  "dependencies": {
+    "@sysadm/shared": "workspace:*",
+    "hono": "^4.6.0",
+    "lucide-react": "^1.63.0",
+    "react": "^19.0.0",
+    "react-router": "^7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0"
+  }
+}

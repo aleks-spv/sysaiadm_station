@@ -2,14 +2,17 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import type { InventoryNode, Task, TaskStatus } from "@sysadm/shared";
 import { api, subscribeEvents } from "../api";
+import { cn, errorText, fieldClass } from "@/lib/utils";
+import { fmtDateTime } from "@/i18n";
+import { t as tr } from "@/i18n/app";
 
 const STATUSES: Array<TaskStatus | ""> = ["", "running", "waiting_permission", "idle", "stopped", "error"];
 const STATUS_LABEL: Record<TaskStatus, string> = {
-  running: "выполняется",
-  idle: "ожидает",
-  waiting_permission: "ждёт подтверждения",
-  stopped: "остановлена",
-  error: "ошибка",
+  running: tr("tasks.running"),
+  idle: tr("tasks.idle"),
+  waiting_permission: tr("status.waiting_permission"),
+  stopped: tr("status.stopped"),
+  error: tr("status.error"),
 };
 
 export default function TasksPage() {
@@ -22,7 +25,7 @@ export default function TasksPage() {
     api
       .tasks(filter || undefined)
       .then(setTasks)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Ошибка"));
+      .catch((err: unknown) => setError(errorText(err)));
   };
 
   useEffect(() => {
@@ -39,22 +42,22 @@ export default function TasksPage() {
   const waiting = tasks.filter((t) => t.status === "waiting_permission");
   const rest = tasks.filter((t) => t.status !== "waiting_permission");
 
-  const stop = (id: string) => api.stopTask(id).then(load).catch((err: unknown) => setError(err instanceof Error ? err.message : "Ошибка"));
+  const stop = (id: string) => api.stopTask(id).then(load).catch((err: unknown) => setError(errorText(err)));
 
   const row = (t: Task) => (
-    <tr key={t.id} className="border-t">
-      <td className="py-1 pr-3">
-        <Link className="underline" to={`/tasks/${t.id}`}>
+    <tr key={t.id} className="border-t border-border/60 hover:bg-muted/40">
+      <td className="py-2 pr-3">
+        <Link className="font-medium hover:text-primary" to={`/nodes/${t.nodeId}/tasks/${t.id}`}>
           {t.title}
         </Link>
       </td>
       <td className="pr-3">{nodes.get(t.nodeId) ?? t.nodeId}</td>
       <td className="pr-3">{STATUS_LABEL[t.status]}</td>
-      <td className="pr-3 text-neutral-500">{new Date(t.createdAt).toLocaleString()}</td>
+      <td className="pr-3 text-muted-foreground">{fmtDateTime(t.createdAt)}</td>
       <td>
         {t.status === "running" || t.status === "waiting_permission" ? (
-          <button className="text-red-700 underline" onClick={() => stop(t.id)}>
-            Стоп
+          <button className="text-destructive underline" onClick={() => stop(t.id)}>
+            {tr("common.stop")}
           </button>
         ) : null}
       </td>
@@ -62,23 +65,23 @@ export default function TasksPage() {
   );
 
   return (
-    <div className="max-w-4xl space-y-4 p-4 text-sm">
+    <div className="mx-auto w-full max-w-5xl space-y-4 overflow-y-auto p-6 text-sm">
       <header className="flex items-center gap-3">
-        <h1 className="text-lg font-semibold">Задачи</h1>
-        <select className="rounded border px-2 py-1" value={filter} onChange={(e) => setFilter(e.target.value as TaskStatus | "")}>
+        <h1 className="text-xl font-semibold tracking-tight">{tr("tasks.title")}</h1>
+        <select className={cn(fieldClass, "w-auto")} value={filter} onChange={(e) => setFilter(e.target.value as TaskStatus | "")}>
           {STATUSES.map((s) => (
             <option key={s} value={s}>
-              {s === "" ? "все статусы" : STATUS_LABEL[s]}
+              {s === "" ? tr("tasks.allStatuses") : STATUS_LABEL[s]}
             </option>
           ))}
         </select>
       </header>
 
-      {error && <p className="text-red-600">{error}</p>}
+      {error && <p className="text-destructive">{error}</p>}
 
       {waiting.length > 0 && (
         <section>
-          <h2 className="mb-1 font-medium text-amber-700">Ждут подтверждения</h2>
+          <h2 className="mb-1 font-medium text-amber-600 dark:text-amber-400">{tr("tasks.waiting")}</h2>
           <table className="w-full text-left">
             <tbody>{waiting.map(row)}</tbody>
           </table>
@@ -86,12 +89,12 @@ export default function TasksPage() {
       )}
 
       <table className="w-full text-left">
-        <thead className="text-xs text-neutral-500">
+        <thead className="text-xs text-muted-foreground">
           <tr>
-            <th className="pr-3">Задача</th>
-            <th className="pr-3">Узел</th>
-            <th className="pr-3">Статус</th>
-            <th className="pr-3">Создана</th>
+            <th className="pr-3">{tr("tasks.task")}</th>
+            <th className="pr-3">{tr("tasks.node")}</th>
+            <th className="pr-3">{tr("tasks.status")}</th>
+            <th className="pr-3">{tr("tasks.created")}</th>
             <th />
           </tr>
         </thead>

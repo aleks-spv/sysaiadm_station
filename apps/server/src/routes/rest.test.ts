@@ -24,6 +24,8 @@ const config: Config = {
   opencodePort: 4096,
   opencodeHome: join(dir, "home"),
   pluginPath: join(dir, "plugin"),
+  dataDir: join(dir, "data"),
+  devMode: false,
 };
 
 const runtime: Runtime = {
@@ -51,7 +53,7 @@ const concrete = (path: string) => path.replace(/:[A-Za-z]+/g, "x");
 test("every API route is in ROUTE_SCOPES, or is health, auth or cookie-only tokens", () => {
   expect(apiRoutes().length).toBeGreaterThan(30);
   const missing = apiRoutes()
-    .filter((r) => r.path !== "/api/health" && !r.path.startsWith("/api/auth") && !r.path.startsWith("/api/tokens"))
+    .filter((r) => r.path !== "/api/health" && !r.path.startsWith("/api/auth") && !r.path.startsWith("/api/tokens") && !r.path.startsWith("/api/plugins"))
     .filter((r) => !ROUTE_SCOPES.some((s) => s.method === r.method && s.pattern === r.path))
     .map((r) => `${r.method} ${r.path}`);
   expect(missing).toEqual([]);
@@ -72,6 +74,14 @@ test("an unlisted /api path is 403 for an admin token, the cookie rule does not 
   const { token } = createToken(built.db, { name: "adm-unlisted", scopes: ["admin"] });
   const res = await built.publicApp.request("/api/nodes/x/unlisted", { method: "POST", headers: { authorization: `Bearer ${token}` } });
   expect(res.status).toBe(403);
+});
+
+test("plugin routes are cookie-only: an admin token gets 403", async () => {
+  const { token } = createToken(built.db, { name: "adm-plugins", scopes: ["admin"] });
+  for (const path of ["/api/plugins", "/api/plugins/wireguard/tunnels"]) {
+    const res = await built.publicApp.request(path, { headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(403);
+  }
 });
 
 test("approve token cannot answer with always, but can answer once", async () => {
@@ -110,4 +120,33 @@ test("a mutation by an admin token is audited as token:<name>", async () => {
   expect(res.status).toBeLessThan(300);
   const row = built.db.query<{ actor: string }, []>("SELECT actor FROM audit WHERE action = 'skill_create' ORDER BY id DESC").get();
   expect(row?.actor).toBe("token:auditor");
+});
+
+test("export → import round trip and a backup over HTTP with an admin token", async () => {
+  const { token } = createToken(built.db, { name: "adm-transfer", scopes: ["admin"] });
+  const auth = { Authorization: `Bearer ${token}` };
+  const call = (method: string, path: string, body?: BodyInit, json = true) =>
+    built.publicApp.request(path, { method, headers: json && body ? { ...auth, "Content-Type": "application/json" } : auth, body });
+
+  const company = await (await call("POST", "/api/nodes", JSON.stringify({ kind: "company", name: "Transfer Co" }))).json();
+  expect((await call("POST", "/api/inventory/export", JSON.stringify({ rootId: company.id, passphrase: "short" }))).status).toBe(400);
+  const res = await call("POST", "/api/inventory/export", JSON.stringify({ rootId: company.id, passphrase: "long enough passphrase" }));
+  expect(res.status).toBe(200);
+  expect(res.headers.get("Content-Disposition")).toContain(".sysaiadm");
+  const file = await res.text();
+
+  const form = new FormData();
+  form.set("file", new File([file], "x.sysaiadm"));
+  form.set("passphrase", "long enough passphrase");
+  const imported = await call("POST", "/api/inventory/import", form, false);
+  expect(await imported.json()).toEqual({ nodes: 1, credentials: 0, warnings: [] });
+
+  form.set("passphrase", "wrong passphrase here");
+  expect((await call("POST", "/api/inventory/import", form, false)).status).toBe(400);
+
+  const backup = await call("POST", "/api/backups");
+  expect(backup.status).toBe(201);
+  const { name } = await backup.json();
+  expect((await call("GET", `/api/backups/${name}`)).status).toBe(200);
+  expect((await call("GET", "/api/backups/..%2Fsecret")).status).toBe(404);
 });

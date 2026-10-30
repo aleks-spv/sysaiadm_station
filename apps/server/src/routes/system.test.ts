@@ -19,7 +19,7 @@ let app: Hono;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "system-routes-"));
   db = openDb(join(dir, "system.sqlite"));
-  log = createLog({ secrets: [SECRET] });
+  log = createLog({ secrets: [SECRET], minLevel: "debug" });
   restarts = 0;
   const proc = {
     status: () => ({ state: "running" as const, pid: 1, restarts: 0, lastExitCode: null, startedAt: 0 }),
@@ -60,7 +60,16 @@ test("logs respect limit and never contain the secret", async () => {
 
 test("logs reject unknown filters with 400", async () => {
   expect((await app.request("/api/system/logs?source=nope")).status).toBe(400);
-  expect((await app.request("/api/system/logs?level=debug")).status).toBe(400);
+  expect((await app.request("/api/system/logs?level=bogus")).status).toBe(400);
+});
+
+test("level=debug returns only debug entries", async () => {
+  log.write("app", "debug", "dbg-line");
+  log.write("app", "info", "info-line");
+  const res = await app.request("/api/system/logs?level=debug");
+  const rows = (await res.json()) as Array<{ msg: string; level: string }>;
+  expect(rows.map((r) => r.msg)).toEqual(["dbg-line"]);
+  expect(rows[0].level).toBe("debug");
 });
 
 test("POST tokens returns the raw token once; GET never returns token or hash", async () => {

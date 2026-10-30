@@ -1,15 +1,17 @@
 {
   "name": "sysadm",
+  "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "plugins/*"
   ],
   "scripts": {
     "dev": "bun run --filter '*' dev",
     "build": "bun run --filter '*' build",
-    "test": "bun test apps/server packages",
+    "test": "bun test apps/server apps/web packages plugins",
     "typecheck": "tsc --noEmit -p . && bun run --filter @sysadm/web typecheck"
   },
   "devDependencies": {

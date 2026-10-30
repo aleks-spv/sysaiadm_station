@@ -1,0 +1,17 @@
+{
+  "name": "@sysadm-plugins/scheduler",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "description": "SysAiAdm Station plugin: scheduled agent tasks on a server (once, daily, weekly, monthly)",
+  "dependencies": {
+    "@sysadm/shared": "workspace:*",
+    "hono": "^4.6.0",
+    "lucide-react": "^1.63.0",
+    "react": "^19.0.0",
+    "react-router": "^7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0"
+  }
+}

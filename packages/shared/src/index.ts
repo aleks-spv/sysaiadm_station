@@ -56,6 +56,7 @@ export interface Task {
   title: string;
   status: TaskStatus;
   createdAt: number;
+  archivedAt: number | null;
 }
 
 export interface ExecVerdict {
@@ -111,4 +112,33 @@ export interface ImportPreview {
     reason?: string;
   }>;
   warnings: string[];
+}
+
+// Server card (/init): hardware and network facts sysadm collects over SSH with a fixed script, no model involved.
+export interface NodeFacts {
+  collectedAt: number;
+  hostname: string;
+  os: string;
+  kernel: string | null;
+  uptimeSec: number | null;
+  // "kvm", "vmware", "microsoft", "none"…; null when unknown.
+  virtualization: string | null;
+  vendor: string | null; // system manufacturer and product, e.g. "Dell Inc. PowerEdge R640"
+  cpu: { model: string; sockets: number | null; cores: number | null; threads: number | null };
+  memory: { totalBytes: number; availableBytes: number | null; swapBytes: number | null };
+  disks: Array<{ name: string; model: string | null; sizeBytes: number; rotational: boolean | null }>;
+  filesystems: Array<{ mount: string; fstype: string; sizeBytes: number; usedBytes: number }>;
+  // Container and VM plumbing (docker0, br-*, veth*, tap*, fwbr*…) is left out.
+  interfaces: Array<{ name: string; mac: string | null; up: boolean; addresses: string[] }>;
+  gateway: string | null;
+  dns: string[];
+}
+
+// Chat slash command: "/name args" sends the template with $ARGUMENTS replaced.
+export interface ChatCommand {
+  name: string;
+  description: string;
+  template: string;
+  // Agent for a new task started by the command; null keeps the composer's choice.
+  agent: string | null;
 }

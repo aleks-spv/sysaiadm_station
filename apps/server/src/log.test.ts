@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { createLog } from "./log";
+import { createLog, parseLevel } from "./log";
 
 const realLog = console.log;
 const realWarn = console.warn;
@@ -56,5 +56,24 @@ test("every write is mirrored to console with its level", () => {
   const log = createLog({ secrets: [] });
   log.write("app", "info", "hello");
   log.write("app", "warn", "careful");
-  expect(seen).toEqual(["log:[app] hello", "warn:[app] careful"]);
+  expect(seen).toEqual(["log:[info] [app] hello", "warn:[warn] [app] careful"]);
+});
+
+test("minLevel drops lower levels from buffer and console", () => {
+  const seen: string[] = [];
+  console.log = (line: string) => seen.push(line);
+  const log = createLog({ secrets: [], minLevel: "warn" });
+  log.write("app", "info", "quiet");
+  expect(log.query()).toEqual([]);
+  expect(seen).toEqual([]);
+  const debug = createLog({ secrets: [], minLevel: "debug" });
+  debug.write("app", "debug", "d");
+  expect(debug.query().length).toBe(1);
+});
+
+test("parseLevel accepts known values and flags unknown ones", () => {
+  expect(parseLevel("DEBUG ")).toBe("debug");
+  expect(parseLevel(undefined)).toBe("info");
+  expect(parseLevel("")).toBe("info");
+  expect(parseLevel("trace")).toBeNull();
 });

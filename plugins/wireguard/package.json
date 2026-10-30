@@ -1,0 +1,16 @@
+{
+  "name": "@sysadm-plugins/wireguard",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "description": "SysAiAdm Station plugin: WireGuard client tunnels from the SysAiAdm Station container to remote sites",
+  "dependencies": {
+    "@sysadm/shared": "workspace:*",
+    "hono": "^4.6.0",
+    "lucide-react": "^1.63.0",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0"
+  }
+}

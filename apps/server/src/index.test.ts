@@ -1,10 +1,11 @@
-import { afterAll, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLog } from "./log";
-import { buildApp, ConfigError, readConfig, type BuiltApp, type Config, type Runtime } from "./index";
+import { openDb } from "./db";
+import { buildApp, ConfigError, readConfig, syncBuiltinSkills, type BuiltApp, type Config, type Runtime } from "./index";
 
 const dir = mkdtempSync(join(tmpdir(), "sysadm-index-"));
 const TOKEN = "i".repeat(40);
@@ -22,6 +23,8 @@ const config: Config = {
   opencodePort: 4096,
   opencodeHome: join(dir, "home"),
   pluginPath: join(dir, "plugin"),
+  dataDir: join(dir, "data"),
+  devMode: false,
 };
 
 const runtime: Runtime = {
@@ -60,6 +63,21 @@ test("readConfig needs only the master key, infra dir and db path", () => {
   expect(cfg.pluginPath).toBe("/app/packages/plugin");
 });
 
+const BASE_ENV = { SYSADM_MASTER_KEY: MASTER, INFRA_DIR: "/tmp/i", DB_PATH: ":memory:" };
+
+test("SYSADM_ENV: only the exact value dev turns dev mode on", () => {
+  expect(readConfig(BASE_ENV).devMode).toBe(false);
+  expect(readConfig({ ...BASE_ENV, SYSADM_ENV: "" }).devMode).toBe(false);
+  expect(readConfig({ ...BASE_ENV, SYSADM_ENV: "prod" }).devMode).toBe(false);
+  expect(readConfig({ ...BASE_ENV, SYSADM_ENV: "dev" }).devMode).toBe(true);
+});
+
+test("SYSADM_ENV: a typo fails startup instead of running as prod", () => {
+  for (const value of ["Dev", "devv", "staging"]) {
+    expect(() => readConfig({ ...BASE_ENV, SYSADM_ENV: value })).toThrow("SYSADM_ENV");
+  }
+});
+
 test("readConfig rejects a bad port", () => {
   expect(() => readConfig({ SYSADM_MASTER_KEY: MASTER, INFRA_DIR: "/tmp/i", DB_PATH: ":memory:", OPENCODE_PORT: "abc" })).toThrow(
     "OPENCODE_PORT must be a port number",
@@ -74,7 +92,7 @@ test("health answers 200 without a session", async () => {
 
 test("health answers 503 once the database is closed", async () => {
   const other = await buildApp(config, { background: false, runtime });
-  other.stop();
+  await other.stop();
   const res = await other.publicApp.request("/api/health");
   expect(res.status).toBe(503);
   expect(await res.json()).toEqual({ ok: false });
@@ -118,6 +136,54 @@ test("a body over 1 MiB is refused with 413", async () => {
     body: JSON.stringify({ name: big }),
   });
   expect(res.status).toBe(413);
+});
+
+describe("request log", () => {
+  async function loggedApp() {
+    const log = createLog({ secrets: [], minLevel: "debug" });
+    const app = await buildApp(config, { background: false, runtime: { ...runtime, log } });
+    return { app, log };
+  }
+
+  test("an unauthenticated tree request is logged as a warn with its status", async () => {
+    const { app, log } = await loggedApp();
+    await app.publicApp.request("/api/tree");
+    const entry = log.query().find((e) => e.msg.includes("GET /api/tree"));
+    expect(entry?.level).toBe("warn");
+    expect(entry?.msg).toContain(" 401 ");
+    app.stop();
+  });
+
+  test("health polling is not logged", async () => {
+    const { app, log } = await loggedApp();
+    for (let i = 0; i < 10; i++) await app.publicApp.request("/api/health");
+    expect(log.query()).toEqual([]);
+    app.stop();
+  });
+
+  test("a thrown error becomes a 500 and an error entry", async () => {
+    const { app, log } = await loggedApp();
+    await app.stop(); // closes the database, so the next token lookup throws
+    const res = await app.publicApp.request("/api/tree", { headers: { authorization: `Bearer sat_${"x".repeat(40)}` } });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "internal error" });
+    expect(log.query({ level: "error" }).some((e) => e.msg.includes("unhandled GET /api/tree"))).toBe(true);
+  });
+
+  test("a failed login is logged at info and never contains the password", async () => {
+    const { app, log } = await loggedApp();
+    const res = await app.publicApp.request("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: "marker-pass-123", code: "000000" }),
+    });
+    expect(res.status).toBe(401);
+    const entry = log.query().find((e) => e.msg.includes("POST /api/auth/login"));
+    expect(entry?.level).toBe("info");
+    expect(entry?.msg).toContain(" 401 ");
+    expect(log.query().some((e) => e.msg.includes("marker-pass-123"))).toBe(false);
+    app.stop();
+  });
 });
 
 // Runs the real entry point against a fake `opencode`, then checks that SIGTERM stops both processes.
@@ -178,3 +244,22 @@ Bun.serve({ hostname: "127.0.0.1", port, fetch: () => Response.json({ ok: true }
   expect(server.exitCode).toBe(0);
   expect(() => process.kill(childPid, 0)).toThrow();
 }, 40_000);
+
+test("syncBuiltinSkills reads folded descriptions and drops built-ins no longer shipped", () => {
+  const skills = mkdtempSync(join(dir, "skills-"));
+  mkdirSync(join(skills, "fresh"));
+  writeFileSync(join(skills, "fresh", "SKILL.md"), "---\nname: fresh\ndescription: Manage things. Use when\n  things break.\n---\nbody\n");
+  const db = openDb(":memory:");
+  db.run("INSERT INTO skills (id, name, description, content, builtin) VALUES ('gone', 'gone', '', '', 1), ('mine', 'mine', '', '', 0)");
+  db.run("INSERT INTO nodes (id, kind, name) VALUES ('n1', 'company', 'Acme')");
+  db.run("INSERT INTO node_skills (node_id, skill_id) VALUES ('n1', 'gone')");
+
+  expect(syncBuiltinSkills(db, skills)).toBe(1);
+  const rows = db.query<{ id: string; description: string }, []>("SELECT id, description FROM skills ORDER BY id").all();
+  expect(rows).toEqual([
+    { id: "fresh", description: "Manage things. Use when things break." },
+    { id: "mine", description: "" },
+  ]);
+  expect(db.query("SELECT * FROM node_skills").all()).toEqual([]);
+  db.close();
+});

@@ -64,6 +64,7 @@ beforeEach(() => {
       calls.push(input);
       return execImpl(input);
     },
+    filterOutput: async (o) => ({ stdout: o.stdout.toUpperCase(), stderr: o.stderr, note: "[filtered]" }),
   });
 });
 
@@ -124,6 +125,14 @@ test("exec through a bastion sends two hops in order and pins both host keys", a
   const audit = db.query<{ action: string; detail: string }, []>("SELECT action, detail FROM audit WHERE action = 'exec'").get();
   expect(audit?.action).toBe("exec");
   expect(JSON.parse(audit?.detail ?? "{}")).toMatchObject({ via: ["bastion"], exitCode: 0 });
+});
+
+test("plugin output filters apply unless the model asks for raw output", async () => {
+  const filtered = (await (await exec("uptime")).json()) as { stdout: string; note?: string };
+  expect(filtered).toMatchObject({ stdout: "UP 1 DAY\n", note: "[filtered]" });
+  const raw = (await (await exec("uptime", { raw: true })).json()) as { stdout: string; note?: string };
+  expect(raw.stdout).toBe("up 1 day\n");
+  expect(raw.note).toBeUndefined();
 });
 
 test("a host key mismatch on the bastion is a 409 that names the bastion", async () => {

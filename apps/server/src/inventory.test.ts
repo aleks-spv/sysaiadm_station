@@ -19,7 +19,7 @@ let db: Database;
 
 beforeEach(() => {
   db = openDb(":memory:");
-  for (const id of ["linux-common", "debian-ubuntu", "proxmox", "windows-server", "ops"]) {
+  for (const id of ["linux-common", "linux-virtualization", "proxmox", "windows-server", "powershell-windows", "ops"]) {
     db.run("INSERT INTO skills (id, name, description, content, builtin) VALUES (?, ?, 'd', 'c', 1)", [id, id]);
   }
   db.run(
@@ -52,12 +52,12 @@ test("moving a node into its own subtree is rejected", () => {
   expect(() => moveNode(db, root.id, host.id)).toThrow("MOVE_CYCLE");
 });
 
-test("windows vm gets powershell and only the windows-server default skill", () => {
+test("windows vm gets powershell and the windows default skills", () => {
   const root = company();
   const win = vm(root.id, "win-01", "10.0.0.9", { os: "windows" });
   const eff = resolveEffective(db, win.id);
   expect(eff.shell).toBe("powershell");
-  expect(eff.skillSources).toEqual({ "windows-server": "os" });
+  expect(eff.skillSources).toEqual({ "windows-server": "os", "powershell-windows": "os" });
 });
 
 test("nearest skill with the same id wins over the ancestor's", () => {

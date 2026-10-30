@@ -96,15 +96,26 @@ function subtreeRows(ctx: Ctx, id: string): Row[] {
   return [...ctx.rows.values()].filter((row) => ancestors(ctx, row.id).some((a) => a.id === id));
 }
 
+const LINUX_SKILLS = [
+  "linux-common",
+  "linux-troubleshooting",
+  "linux-service-management",
+  "linux-package-management",
+  "linux-disk-storage",
+  "linux-log-management",
+  "linux-network-admin",
+];
+
+// Attached by OS; the rest of the built-in set (hardening, ssh, backup, docker) is attached by hand.
 function osSkills(os: OsKind): string[] {
   switch (os) {
     case "ubuntu":
     case "debian":
-      return ["linux-common", "debian-ubuntu"];
+      return LINUX_SKILLS;
     case "proxmox":
-      return ["linux-common", "debian-ubuntu", "proxmox"];
+      return [...LINUX_SKILLS, "linux-virtualization", "proxmox"];
     case "windows":
-      return ["windows-server"];
+      return ["windows-server", "powershell-windows"];
     default:
       return [];
   }

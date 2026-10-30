@@ -1,0 +1,37 @@
+#!/bin/bash
+# Root wrapper for the WireGuard plugin; sudoers allows uid 1000 to run only this file.
+# Takes a tunnel name, never a path: the config is read from the plugin dir and copied to a root-owned dir before checks.
+set -euo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+SRC_DIR=/data/plugins/wireguard
+RUN_DIR=/run/sysadm-wg
+NAME_RE='^[a-zA-Z0-9_=+.-]{1,15}$'
+ALLOWED='^[[:space:]]*(#.*|\[(Interface|Peer)\]|(PrivateKey|Address|MTU|Table|FwMark|PublicKey|PresharedKey|Endpoint|AllowedIPs|PersistentKeepalive)[[:space:]]*=.*)?$'
+
+cmd=${1:-}
+name=${2:-}
+case "$cmd" in
+  dump) exec wg show all dump ;;
+  up | down) [[ $name =~ $NAME_RE ]] || { echo "bad tunnel name" >&2; exit 2; } ;;
+  *) echo "usage: sysadm-wg up|down <name> | dump" >&2; exit 2 ;;
+esac
+
+if [[ $cmd == down ]]; then
+  # Only a WireGuard interface may be deleted: `wg show` fails on eth0 and friends.
+  if wg show "$name" >/dev/null 2>&1; then ip link delete dev "$name"; fi
+  rm -f "$RUN_DIR/$name.conf"
+  exit 0
+fi
+
+src="$SRC_DIR/$name.conf"
+dst="$RUN_DIR/$name.conf"
+if [[ ! -f $src || -L $src ]]; then echo "config not found" >&2; exit 2; fi
+install -d -m 700 "$RUN_DIR"
+install -m 600 "$src" "$dst"
+# Case-insensitive: wg-quick lowercases keys. Same whitelist as the app: no PostUp/PreUp hooks, no DNS, no SaveConfig.
+if grep -Eivq "$ALLOWED" "$dst"; then
+  rm -f "$dst"
+  echo "config has keys outside the whitelist" >&2
+  exit 2
+fi
+exec wg-quick up "$dst"

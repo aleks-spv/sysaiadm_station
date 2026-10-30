@@ -12,13 +12,14 @@ type Verdict = {
   autopilot?: boolean;
 };
 
-type ExecResult = { exitCode: number; stdout: string; stderr: string; truncated: boolean };
+type ExecResult = { exitCode: number; stdout: string; stderr: string; truncated: boolean; note?: string };
 
 const SCHEMA = {
   type: "object",
   properties: {
     command: { type: "string", minLength: 1, maxLength: 4096 },
     timeoutSec: { type: "integer", minimum: 1, maximum: 600 },
+    raw: { type: "boolean", description: "полный вывод без сжатия; только если сжатый вывод скрыл нужное" },
   },
   required: ["command"],
   additionalProperties: false,
@@ -58,7 +59,7 @@ export default {
         description: DESCRIPTION,
         input: SCHEMA,
         execute: async (input, context) => {
-          const { command, timeoutSec } = input as { command: string; timeoutSec?: number };
+          const { command, timeoutSec, raw } = input as { command: string; timeoutSec?: number; raw?: boolean };
 
           const check = await post<Verdict>("/internal/check", { sessionID: context.sessionID, command }, context.signal);
           if (check.verdict === "deny") throw new Error(check.reason ?? "command denied by policy");
@@ -77,7 +78,7 @@ export default {
           await context.progress({ status: command });
           const res = await post<ExecResult>(
             "/internal/exec",
-            { sessionID: context.sessionID, command, timeoutSec, toolCallId: context.id },
+            { sessionID: context.sessionID, command, timeoutSec, raw, toolCallId: context.id },
             context.signal,
           );
           const content = [
@@ -87,6 +88,7 @@ export default {
             "--- stderr ---",
             res.stderr,
             res.truncated ? "[output truncated]" : "",
+            res.note ?? "",
           ].join("\n");
           return { content };
         },

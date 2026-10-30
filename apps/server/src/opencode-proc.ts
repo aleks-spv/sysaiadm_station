@@ -1,6 +1,7 @@
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { authHeaders } from "./opencode";
+import type { LogLevel } from "./log";
 
 // Supervises `opencode serve` as a child: allowlisted env, readiness probe, restart with backoff.
 // stop() resolves only after the child has exited.
@@ -27,7 +28,7 @@ export interface ProcOptions {
   internalToken: string;
   // null when authMode=none: no OPENCODE_SERVER_PASSWORD is exported and no header is sent.
   password: string | null;
-  onLine?: (source: "opencode", line: string) => void;
+  onLine?: (source: "opencode", line: string, level: LogLevel) => void;
   readyTimeoutMs?: number;
   minBackoffMs?: number;
   maxBackoffMs?: number;
@@ -129,7 +130,7 @@ export function startOpencode(opts: ProcOptions): OpencodeProc {
       });
     } catch (err) {
       // A missing or unexecutable binary must not take sysadm down: it backs off like any crash.
-      onLine("opencode", `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+      onLine("opencode", `spawn failed: ${err instanceof Error ? err.message : String(err)}`, "error");
       lastExit = -1;
       scheduleRestart();
       return;
@@ -138,8 +139,8 @@ export function startOpencode(opts: ProcOptions): OpencodeProc {
     current = proc;
     startedAt = began;
     state = "starting";
-    pipeLines(proc.stdout as ReadableStream<Uint8Array>, (line) => onLine("opencode", line));
-    pipeLines(proc.stderr as ReadableStream<Uint8Array>, (line) => onLine("opencode", line));
+    pipeLines(proc.stdout as ReadableStream<Uint8Array>, (line) => onLine("opencode", line, "info"));
+    pipeLines(proc.stderr as ReadableStream<Uint8Array>, (line) => onLine("opencode", line, "warn"));
     void waitReady(proc);
     void proc.exited.then((code) => {
       if (current !== proc) return; // stopped or restarted on purpose
@@ -189,12 +190,4 @@ export function startOpencode(opts: ProcOptions): OpencodeProc {
       state = "stopped";
     },
   };
-}
-
-export function writeOpencodeConfig(infraDir: string, pluginPath: string, base: Record<string, unknown>): void {
-  mkdirSync(infraDir, { recursive: true });
-  const target = join(infraDir, "opencode.json");
-  const tmp = `${target}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ ...base, plugins: [{ package: pluginPath }] }, null, 2));
-  renameSync(tmp, target);
 }

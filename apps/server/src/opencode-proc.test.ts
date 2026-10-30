@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { childEnv, startOpencode, writeOpencodeConfig, type OpencodeProc, type ProcOptions } from "./opencode-proc";
+import { childEnv, startOpencode, type OpencodeProc, type ProcOptions } from "./opencode-proc";
 
 let dir: string;
 const procs: OpencodeProc[] = [];
@@ -85,6 +85,25 @@ test("child env is an allowlist: no master key or DB path, password exported", a
   }
 }, 20_000);
 
+test("stdout lines reach onLine as info, stderr lines as warn", async () => {
+  const bin = join(dir, "opencode-streams");
+  writeFileSync(
+    bin,
+    `#!${process.execPath}
+process.stdout.write("out-line\\n");
+process.stderr.write("err-line\\n");
+const port = Number(Bun.argv[Bun.argv.indexOf("--port") + 1]);
+Bun.serve({ hostname: "127.0.0.1", port, fetch: () => Response.json({ ok: true }) });
+`,
+  );
+  chmodSync(bin, 0o755);
+  const seen: Array<[string, string, string]> = [];
+  start({ bin, onLine: (source, line, level) => seen.push([source, line, level]) });
+  await waitFor(() => seen.length >= 2);
+  expect(seen).toContainEqual(["opencode", "out-line", "info"]);
+  expect(seen).toContainEqual(["opencode", "err-line", "warn"]);
+}, 20_000);
+
 test("fake binary becomes running after /api/info answers 200", async () => {
   const { bin } = fakeBin("serve");
   const proc = start({ bin });
@@ -142,12 +161,3 @@ test("password null: no OPENCODE_SERVER_PASSWORD in env and no auth header", asy
   expect(proc.headers).toBeUndefined();
   expect(childEnv({ home: "/h", password: null, internalUrl: "u", internalToken: "t" }).OPENCODE_SERVER_PASSWORD).toBeUndefined();
 }, 20_000);
-
-test("writeOpencodeConfig writes valid JSON with the plugin path and keeps base keys", () => {
-  const infra = join(dir, "infra");
-  writeOpencodeConfig(infra, "/app/packages/plugin/dist/index.js", { $schema: "x", policies: [] });
-  const cfg = JSON.parse(readFileSync(join(infra, "opencode.json"), "utf8"));
-  expect(cfg.plugins).toEqual([{ package: "/app/packages/plugin/dist/index.js" }]);
-  expect(cfg.policies).toEqual([]);
-  expect(existsSync(join(infra, "opencode.json.tmp"))).toBe(false);
-});
