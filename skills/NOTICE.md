@@ -1,6 +1,6 @@
 # Встроенные скилы: источники и лицензии
 
-Свои скилы SysAiAdm Station: `linux-common` (правила работы через `remote_exec`: `sudo -n`, без пейджеров, бэкап перед правкой) и `proxmox`.
+Свои скилы SysAiAdm Station: `linux-common` (правила работы через `remote_exec`: `sudo -n`, без пейджеров, бэкап перед правкой), `proxmox` и `docker` (диагностика контейнеров и compose без `-it`/`-f`, секреты из env не выводятся).
 
 Остальные взяты без изменений из открытых репозиториев. В каждом `SKILL.md` сохранена исходная шапка с автором и лицензией.
 
@@ -16,7 +16,7 @@ MIT, Copyright (c) 2026 Peter Bamuhigire. https://github.com/peterbamuhigire/lin
 
 Код под MIT, текст под CC BY 4.0. https://github.com/sickn33/agentic-awesome-skills, коммит `753c5f7bb64650b7d3ac0ab84d9b24892d7aed8b`.
 
-- `windows-server`, `ssh-configuration`, `backup-recovery`, `docker-management`: исходно из https://github.com/BagelHole/DevOps-Security-Agent-Skills (MIT).
+- `windows-server`, `ssh-configuration`, `backup-recovery`, `docker-management`: исходно из https://github.com/BagelHole/DevOps-Security-Agent-Skills (MIT). В `windows-server` добавлен раздел «Long Operations Over SSH» (задача планировщика вместо tmux).
 - `powershell-windows`: из этого же репозитория, раздел community.
 
 Тексты MIT-лицензий: в репозиториях по ссылкам выше.

@@ -54,7 +54,7 @@ test("a subtree export without secrets reuses a same-named credential and warns 
   expect(payload.credentials).toEqual([]);
 
   const acmeOnly = buildExport(src.db, src.key, src.acme.id, false);
-  expect(acmeOnly.credentials).toEqual([{ id: expect.any(String), name: "root-pass", type: "password" }]);
+  expect(acmeOnly.credentials).toEqual([{ id: expect.any(String), name: "root-pass", type: "password", user: null }]);
 
   const key = randomBytes(32);
   const db = openDb(":memory:");

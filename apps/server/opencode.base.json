@@ -2,8 +2,10 @@
   "$schema": "https://opencode.ai/config.json",
   "plugins": [{ "package": "/opt/sysadm-plugin" }],
   "permissions": [
+    { "action": "remote_exec_read", "resource": "*", "effect": "allow" },
     { "action": "remote_exec", "resource": "*", "effect": "ask" },
-    { "action": "remote_exec_dangerous", "resource": "*", "effect": "ask" }
+    { "action": "remote_exec_dangerous", "resource": "*", "effect": "ask" },
+    { "action": "compress", "resource": "*", "effect": "allow" }
   ],
   "policies": [
     { "action": "tool.use", "resource": "shell:*", "effect": "deny" },

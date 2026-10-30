@@ -123,10 +123,11 @@ function forward(client: Client, host: string, port: number): Promise<ClientChan
   });
 }
 
-function runCommand(client: Client, command: string): Promise<Omit<ExecOutput, "hostKeys">> {
+function runCommand(client: Client, command: string, onChannel?: (channel: ClientChannel) => void): Promise<Omit<ExecOutput, "hostKeys">> {
   return new Promise((resolve, reject) => {
     client.exec(command, (err, stream) => {
       if (err) return reject(err);
+      onChannel?.(stream);
       const stdout = new Capture();
       const stderr = new Capture();
       stream.on("data", (data: Buffer) => stdout.push(data));
@@ -204,9 +205,23 @@ export async function execRemote(input: ExecInput): Promise<ExecOutput> {
   stopped.catch(() => {});
   const until = <T>(work: Promise<T>): Promise<T> => Promise.race([work, stopped]);
 
+  let channel: ClientChannel | null = null;
   const abort = () => {
     aborted = true;
     stopWith(new Error("ABORTED"));
+    // A dropped connection alone leaves a non-pty command running until it writes; OpenSSH >= 7.9 delivers
+    // the signal to the command's process group. Give it a moment to leave the socket before tearing down.
+    if (channel) {
+      try {
+        channel.signal("KILL");
+      } catch {
+        // channel already gone
+      }
+      setTimeout(() => {
+        for (const client of [...clients].reverse()) client.destroy();
+      }, 300);
+      return;
+    }
     for (const client of [...clients].reverse()) client.destroy();
   };
   const timer = setTimeout(() => {
@@ -217,7 +232,7 @@ export async function execRemote(input: ExecInput): Promise<ExecOutput> {
 
   try {
     const { target, hostKeys } = await connectChain(input.hops, clients, until);
-    const result = await until(runCommand(target, toExecCommand(input.shell, input.command)));
+    const result = await until(runCommand(target, toExecCommand(input.shell, input.command), (ch) => (channel = ch)));
     return { ...result, hostKeys };
   } catch (err) {
     if (timedOut) throw new Error("EXEC_TIMEOUT");

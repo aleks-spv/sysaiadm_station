@@ -15,6 +15,8 @@ export interface Skill {
   builtin: boolean;
   // "github:owner/repo@ref:path" for skills installed from GitHub.
   source?: string | null;
+  // An original ships with the image: an edited copy (builtin false) can be reset to it.
+  shipped?: boolean;
 }
 
 export interface SkillScan {
@@ -68,6 +70,11 @@ export class ApiError extends Error {
   }
 }
 
+// Fired after any saved change to settings (providers, models, agents, commands, skills, credentials, search),
+// so open pages re-read their lists instead of waiting for a reload.
+export const CONFIG_CHANGED = "sysadm:config-changed";
+const CONFIG_PATH = /^\/api\/(settings\/|commands$|skills|credentials)/;
+
 // The session is an HttpOnly cookie; the only client state is the CSRF-guard header.
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const init: RequestInit = {
@@ -85,6 +92,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     const code = typeof (data as { error?: unknown })?.error === "string" ? (data as { error: string }).error : `HTTP ${res.status}`;
     throw new ApiError(res.status, code);
   }
+  if (method !== "GET" && CONFIG_PATH.test(path)) window.dispatchEvent(new Event(CONFIG_CHANGED));
   return data as T;
 }
 
@@ -103,7 +111,7 @@ export const api = {
     request<InventoryNode>("POST", "/api/nodes", body),
   updateNode: (id: string, fields: NodeFields) => request<InventoryNode>("PATCH", `/api/nodes/${id}`, fields),
   moveNode: (id: string, parentId: string | null) => request<InventoryNode>("POST", `/api/nodes/${id}/move`, { parentId }),
-  deleteNode: (id: string) => request<{ ok: true }>("DELETE", `/api/nodes/${id}`),
+  deleteNode: (id: string, recursive = false) => request<{ ok: true }>("DELETE", `/api/nodes/${id}${recursive ? "?recursive=1" : ""}`),
   resetHostKey: (id: string) => request<{ ok: true }>("POST", `/api/nodes/${id}/reset-hostkey`),
   setNodeSkills: (id: string, skills: string[]) => request<{ ok: true }>("PUT", `/api/nodes/${id}/skills`, { skills }),
 
@@ -112,6 +120,7 @@ export const api = {
     request<Skill>("POST", "/api/skills", body),
   updateSkill: (id: string, body: { name: string; description: string; content: string }) => request<{ id: string }>("PUT", `/api/skills/${id}`, body),
   deleteSkill: (id: string) => request<{ ok: true }>("DELETE", `/api/skills/${id}`),
+  resetSkill: (id: string) => request<{ id: string }>("POST", `/api/skills/${id}/reset`),
   scanSkills: (repo: string, ref?: string) => request<SkillScan>("POST", "/api/skills/github/scan", { repo, ref: ref || undefined }),
   installSkills: (repo: string, ref: string, paths: string[]) =>
     request<{ installed: string[]; updated: string[]; skipped: Array<{ id: string; reason: string }> }>("POST", "/api/skills/github/install", { repo, ref, paths }),
@@ -124,7 +133,7 @@ export const api = {
   },
 
   credentials: () => request<Credential[]>("GET", "/api/credentials"),
-  createCredential: (body: { name: string; type: "key" | "password"; privateKey?: string; passphrase?: string; password?: string }) =>
+  createCredential: (body: { name: string; type: "key" | "password"; user?: string; privateKey?: string; passphrase?: string; password?: string }) =>
     request<Credential>("POST", "/api/credentials", body),
   deleteCredential: (id: string) => request<{ ok: true }>("DELETE", `/api/credentials/${id}`),
 
@@ -134,12 +143,15 @@ export const api = {
   unarchiveTask: (id: string) => request<Task>("POST", `/api/tasks/${id}/unarchive`),
   taskRetention: () => request<{ days: number }>("GET", "/api/settings/task-retention"),
   setTaskRetention: (days: number) => request<{ days: number }>("PUT", "/api/settings/task-retention", { days }),
-  task: (id: string) =>
-    request<{ task: Task; messages: unknown[] }>("GET", `/api/tasks/${id}`),
+  task: (id: string, tail?: number) =>
+    request<{ task: Task; messages: unknown[] }>("GET", `/api/tasks/${id}${tail ? `?tail=${tail}` : ""}`),
   createTask: (nodeId: string, body: { title: string; prompt: string; agent?: string; model?: { providerID: string; modelID: string } }) =>
     request<Task>("POST", `/api/nodes/${nodeId}/tasks`, body),
   promptTask: (id: string, text: string) => request<{ ok: true }>("POST", `/api/tasks/${id}/prompt`, { text }),
   stopTask: (id: string) => request<{ ok: true }>("POST", `/api/tasks/${id}/stop`),
+  taskForms: (id: string) => request<AgentForm[]>("GET", `/api/tasks/${id}/forms`),
+  replyForm: (id: string, formID: string, answer: FormAnswer) => request<{ ok: true }>("POST", `/api/tasks/${id}/forms/${formID}/reply`, { answer }),
+  cancelForm: (id: string, formID: string) => request<{ ok: true }>("POST", `/api/tasks/${id}/forms/${formID}/cancel`),
   pendingPermissions: (id: string) => request<PendingPermission[]>("GET", `/api/tasks/${id}/permissions`),
   replyPermission: (id: string, requestID: string, decision: "once" | "always" | "reject") =>
     request<{ ok: true }>("POST", `/api/tasks/${id}/permissions/${requestID}`, { decision }),
@@ -197,6 +209,9 @@ export const api = {
   saveBackupSettings: (settings: BackupSettings) => request<BackupSettings>("PUT", "/api/backups/settings", settings),
   createBackup: () => request<BackupFile>("POST", "/api/backups"),
   deleteBackup: (name: string) => request<{ ok: true }>("DELETE", `/api/backups/${encodeURIComponent(name)}`),
+  webSearch: () => request<WebSearchSettings>("GET", "/api/settings/websearch"),
+  saveWebSearch: (settings: WebSearchSettings) => request<WebSearchSettings>("PUT", "/api/settings/websearch", settings),
+  testWebSearch: (query: string) => request<{ provider: string; results: WebSearchResult[] }>("POST", "/api/settings/websearch/test", { query }),
   opencodeVersion: (refresh = false) => request<OpencodeVersion>("GET", `/api/system/opencode/version${refresh ? "?refresh=1" : ""}`),
   upgradeOpencode: () => request<OpencodeVersion>("POST", "/api/system/opencode/upgrade"),
 };
@@ -299,6 +314,20 @@ export interface SystemHealth {
   tasks: { running: number; waiting_permission: number };
 }
 
+export type WebSearchProvider = "off" | "searxng" | "exa" | "tavily" | "firecrawl" | "parallel" | "tinyfish";
+
+export interface WebSearchSettings {
+  provider: WebSearchProvider;
+  searxngUrl: string | null;
+  maxResults: number;
+}
+
+export interface WebSearchResult {
+  title: string;
+  url: string;
+  content: string;
+}
+
 export interface BackupSettings {
   enabled: boolean;
   intervalHours: number;
@@ -344,6 +373,30 @@ async function fetchForm<T>(path: string, form: FormData): Promise<T> {
   return data as T;
 }
 
+// A question from the agent (opencode V2 form). Subset of the V2 field shapes the UI renders.
+interface FieldBase {
+  key: string;
+  title?: string;
+  description?: string;
+  required?: boolean;
+  hidden?: boolean;
+  when?: Array<{ key: string; op: "eq" | "neq"; value: string | number | boolean }>;
+}
+type FormOption = { value: string; label: string; description?: string };
+export type FormField =
+  | (FieldBase & { type: "string"; options?: FormOption[]; custom?: boolean; placeholder?: string; maxLength?: number; default?: string })
+  | (FieldBase & { type: "number" | "integer"; default?: number | string })
+  | (FieldBase & { type: "boolean"; default?: boolean })
+  | (FieldBase & { type: "multiselect"; options: FormOption[]; custom?: boolean; default?: string[] })
+  | { key: string; type: "external"; url: string; title?: string; description?: string };
+export type FormAnswer = Record<string, string | number | boolean | string[]>;
+export interface AgentForm {
+  id: string;
+  sessionID: string;
+  title: string;
+  fields: FormField[];
+}
+
 export interface PendingPermission {
   id: string;
   action: string;
@@ -355,17 +408,37 @@ export interface TaskEvent {
   type: string;
   taskId?: string;
   status?: TaskStatus;
+  // task.delta: streamed text of one content part, not yet in the message list.
+  messageId?: string;
+  ordinal?: number;
+  part?: "text" | "reasoning";
+  delta?: string;
 }
 
-// One SSE stream for the whole app. Returns an unsubscribe function.
+const listeners = new Set<(event: TaskEvent) => void>();
+let source: EventSource | null = null;
+
+// One SSE stream shared by the whole app: every extra EventSource holds one of the browser's
+// six HTTP/1.1 connections per host and starves the regular requests. Returns an unsubscribe function.
 export function subscribeEvents(onEvent: (event: TaskEvent) => void): () => void {
-  const source = new EventSource("/api/events");
-  source.onmessage = (msg: MessageEvent<string>) => {
-    try {
-      onEvent(JSON.parse(msg.data) as TaskEvent);
-    } catch {
-      // Ignore malformed frames; the next status change resyncs the view.
+  listeners.add(onEvent);
+  if (!source) {
+    source = new EventSource("/api/events");
+    source.onmessage = (msg: MessageEvent<string>) => {
+      let event: TaskEvent;
+      try {
+        event = JSON.parse(msg.data) as TaskEvent;
+      } catch {
+        return; // Ignore malformed frames; the next status change resyncs the view.
+      }
+      for (const fn of listeners) fn(event);
+    };
+  }
+  return () => {
+    listeners.delete(onEvent);
+    if (listeners.size === 0) {
+      source?.close();
+      source = null;
     }
   };
-  return () => source.close();
 }

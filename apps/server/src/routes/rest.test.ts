@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROUTE_SCOPES } from "../auth";
@@ -120,6 +120,26 @@ test("a mutation by an admin token is audited as token:<name>", async () => {
   expect(res.status).toBeLessThan(300);
   const row = built.db.query<{ actor: string }, []>("SELECT actor FROM audit WHERE action = 'skill_create' ORDER BY id DESC").get();
   expect(row?.actor).toBe("token:auditor");
+});
+
+test("an edited built-in skill is reset to the shipped original", async () => {
+  const { token } = createToken(built.db, { name: "adm-skills", scopes: ["read", "admin"] });
+  const call = (method: string, path: string, body?: unknown) =>
+    built.publicApp.request(path, { method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const original = "---\nname: Demo\ndescription: shipped\n---\nbody";
+  mkdirSync(join(config.skillsDir, "demo"), { recursive: true });
+  writeFileSync(join(config.skillsDir, "demo", "SKILL.md"), original);
+  built.db.run("INSERT INTO skills (id, name, description, content, builtin) VALUES ('demo', 'Demo', 'shipped', ?, 1)", [original]);
+
+  expect((await call("PUT", "/api/skills/demo", { name: "Mine", description: "edited", content: "mine" })).status).toBe(200);
+  const listed = (await (await call("GET", "/api/skills")).json()) as Array<{ id: string; builtin: number; shipped: boolean }>;
+  expect(listed.find((s) => s.id === "demo")).toMatchObject({ builtin: 0, shipped: true });
+  expect(listed.find((s) => s.id === "custom-skill")).toMatchObject({ shipped: false });
+
+  expect((await call("POST", "/api/skills/demo/reset")).status).toBe(200);
+  const row = built.db.query<{ content: string; builtin: number }, []>("SELECT content, builtin FROM skills WHERE id = 'demo'").get();
+  expect(row).toEqual({ content: original, builtin: 1 });
+  expect((await call("POST", "/api/skills/custom-skill/reset")).status).toBe(404);
 });
 
 test("export → import round trip and a backup over HTTP with an admin token", async () => {

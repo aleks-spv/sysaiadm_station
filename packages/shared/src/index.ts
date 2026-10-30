@@ -44,6 +44,8 @@ export interface Credential {
   id: string;
   name: string;
   type: "key" | "password";
+  // SSH login used when the node does not set its own.
+  user: string | null;
   createdAt: number;
 }
 
@@ -60,7 +62,7 @@ export interface Task {
 }
 
 export interface ExecVerdict {
-  verdict: "deny" | "dangerous" | "normal";
+  verdict: "deny" | "read" | "dangerous" | "normal";
   reason?: string;
   node?: string;
   address?: string;
@@ -104,7 +106,7 @@ export interface ImportTree {
 export interface ImportPreview {
   items: Array<{
     key: string;
-    kind: "group" | "vm";
+    kind: "company" | "group" | "vm";
     name: string;
     address?: string;
     parentKey: string | null;

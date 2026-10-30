@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { EffectiveNode, ExecVerdict, TaskStatus } from "@sysadm/shared";
 import { Hono, type Context } from "hono";
+import { trackExec } from "../exec-registry";
 import { audit, classify } from "../guard";
 import { getNode, resolveEffective } from "../inventory";
 import {
@@ -15,6 +16,7 @@ import {
 } from "../ssh";
 import type { ExecOutputView, FilteredOutput } from "../plugins/types";
 import { open } from "../vault";
+import { formatResults, type WebSearcher } from "../websearch";
 
 const PER_NODE_LIMIT = 4;
 const GLOBAL_LIMIT = 16;
@@ -32,6 +34,9 @@ export interface InternalDeps {
   exec?: (input: ExecInput) => Promise<ExecOutput>;
   // Plugin output filters (compression); skipped when the model asks for raw output.
   filterOutput?: (output: ExecOutputView) => Promise<FilteredOutput>;
+  // Secret masking; applies to raw output too.
+  maskOutput?: (output: ExecOutputView, shown: FilteredOutput) => Promise<FilteredOutput>;
+  webSearch?: WebSearcher;
 }
 
 export interface PlannedHop {
@@ -152,6 +157,27 @@ export function createInternalApp(deps: InternalDeps): Hono {
     await next();
   });
 
+  // The plugin drops web_search from the model's tools while this says false.
+  app.get("/internal/websearch", (c) => c.json({ enabled: deps.webSearch?.enabled() ?? false }));
+
+  app.post("/internal/websearch", async (c) => {
+    const body = await readBody(c);
+    if (typeof body?.sessionID !== "string" || typeof body.query !== "string") return c.json({ error: "bad request" }, 400);
+    const task = findTask(body.sessionID);
+    if (!task) return c.json({ error: "unknown session" }, 404);
+    if (!deps.webSearch) return c.json({ error: "веб-поиск не настроен" }, 404);
+    const detail: Record<string, unknown> = { query: body.query.slice(0, 400) };
+    try {
+      const { provider, results } = await deps.webSearch.search(body.query);
+      audit(db, { actor: ACTOR, action: "web_search", nodeId: task.node_id, taskId: task.id, detail: { ...detail, provider, results: results.length } });
+      return c.json({ content: formatResults(results) });
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      audit(db, { actor: ACTOR, action: "web_search", nodeId: task.node_id, taskId: task.id, detail: { ...detail, error } });
+      return c.json({ error }, 502);
+    }
+  });
+
   app.post("/internal/check", async (c) => {
     const body = await readBody(c);
     const sessionID = body?.sessionID;
@@ -225,15 +251,20 @@ export function createInternalApp(deps: InternalDeps): Hono {
       const started = now();
 
       let out: ExecOutput;
+      const tracked = trackExec(task.id);
       try {
         out = await exec({
           hops: hops.map((h) => h.hop),
           command,
           shell: eff.shell,
           timeoutMs: timeoutRaw * 1000,
-          signal: c.req.raw.signal,
+          signal: AbortSignal.any([c.req.raw.signal, tracked.signal]),
         });
       } catch (err) {
+        if (tracked.signal.aborted) {
+          audit(db, { actor: ACTOR, action: "exec_stopped", nodeId: task.node_id, taskId: task.id, detail: { command, toolCallId } });
+          return c.json({ error: "STOPPED_BY_ADMIN" }, 409);
+        }
         if (err instanceof HostKeyMismatch) {
           const hopName = hops[err.hop]?.name ?? "unknown";
           audit(db, { actor: ACTOR, action: "hostkey_mismatch", nodeId: hops[err.hop]?.nodeId, taskId: task.id, detail: { via } });
@@ -249,6 +280,8 @@ export function createInternalApp(deps: InternalDeps): Hono {
         setTaskStatus(db, task.id, "error");
         if (code === "EXEC_TIMEOUT") return c.json({ error: code }, 504);
         return c.json({ error: code === "ABORTED" ? code : "EXEC_FAILED" }, 408);
+      } finally {
+        tracked.done();
       }
 
       const raced = pinHostKeys(db, hops, out.hostKeys);
@@ -275,10 +308,9 @@ export function createInternalApp(deps: InternalDeps): Hono {
         },
       });
       setTaskStatus(db, task.id, "idle");
-      const shown =
-        deps.filterOutput && body?.raw !== true
-          ? await deps.filterOutput({ nodeId: task.node_id, taskId: task.id, command, shell: eff.shell, exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr })
-          : { stdout: out.stdout, stderr: out.stderr };
+      const view: ExecOutputView = { nodeId: task.node_id, taskId: task.id, command, shell: eff.shell, exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr };
+      let shown: FilteredOutput = deps.filterOutput && body?.raw !== true ? await deps.filterOutput(view) : { stdout: out.stdout, stderr: out.stderr };
+      if (deps.maskOutput) shown = await deps.maskOutput(view, shown);
       return c.json({ exitCode: out.exitCode, ...shown, truncated: out.truncated });
     } finally {
       release(task.node_id);

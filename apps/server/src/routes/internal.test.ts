@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { beforeEach, expect, test } from "bun:test";
 import { openDb } from "../db";
+import { abortTaskExecs } from "../exec-registry";
 import { createNode, updateNode } from "../inventory";
 import { HostKeyMismatch, type ExecInput, type ExecOutput } from "../ssh";
 import { seal } from "../vault";
@@ -79,6 +80,22 @@ async function post(path: string, body: unknown, token = TOKEN): Promise<Respons
 const exec = (command: string, extra: Record<string, unknown> = {}) =>
   post("/internal/exec", { sessionID: "ses-1", command, toolCallId: "call-1", ...extra });
 
+test("Stop aborts the running remote command of that task", async () => {
+  const started = gate();
+  execImpl = (input) =>
+    new Promise((_, reject) => {
+      started.open();
+      input.signal?.addEventListener("abort", () => reject(new Error("ABORTED")));
+    });
+  const pending = exec("du -sh /");
+  await started.wait;
+  expect(abortTaskExecs("task-1")).toBe(1);
+  const res = await pending;
+  expect(res.status).toBe(409);
+  expect(await res.json()).toEqual({ error: "STOPPED_BY_ADMIN" });
+  expect(abortTaskExecs("task-1")).toBe(0);
+});
+
 test("requests without the internal token get 401", async () => {
   const res = await post("/internal/check", { sessionID: "ses-1", command: "uptime" }, "wrong");
   expect(res.status).toBe(401);
@@ -92,7 +109,7 @@ test("an unknown session gets 404", async () => {
 test("check returns the route from inventory, not from the request", async () => {
   const res = await post("/internal/check", { sessionID: "ses-1", command: "uptime", host: "evil.example" });
   const body = (await res.json()) as { verdict: string; address: string; via: string[] };
-  expect(body.verdict).toBe("normal");
+  expect(body.verdict).toBe("read");
   expect(body.address).toBe("10.0.0.5");
   expect(body.via).toEqual(["bastion"]);
 });
@@ -133,6 +150,19 @@ test("plugin output filters apply unless the model asks for raw output", async (
   const raw = (await (await exec("uptime", { raw: true })).json()) as { stdout: string; note?: string };
   expect(raw.stdout).toBe("up 1 day\n");
   expect(raw.note).toBeUndefined();
+});
+
+test("secret masking applies to raw output too, after the filters", async () => {
+  app = createInternalApp({
+    db,
+    token: TOKEN,
+    masterKey: KEY,
+    exec: (input) => execImpl(input),
+    filterOutput: async (o) => ({ stdout: `${o.stdout}!`, stderr: o.stderr, note: "[filtered]" }),
+    maskOutput: async (_, shown) => ({ ...shown, stdout: shown.stdout.replace("1", "*"), note: `${shown.note ?? ""}[masked]` }),
+  });
+  expect(await (await exec("uptime")).json()).toMatchObject({ stdout: "up * day\n!", note: "[filtered][masked]" });
+  expect(await (await exec("uptime", { raw: true })).json()).toMatchObject({ stdout: "up * day\n", note: "[masked]" });
 });
 
 test("a host key mismatch on the bastion is a 409 that names the bastion", async () => {

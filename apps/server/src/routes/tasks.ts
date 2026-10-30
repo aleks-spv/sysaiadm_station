@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { Hono } from "hono";
 import type { Task, TaskStatus } from "@sysadm/shared";
+import { abortTaskExecs } from "../exec-registry";
 import { audit } from "../guard";
 import { getNode } from "../inventory";
 import { nodeDir } from "../materialize";
@@ -11,7 +12,12 @@ import {
   integrations,
   interrupt,
   listPending,
+  listForms,
+  replyForm,
+  cancelForm,
+  type FormAnswer,
   messages,
+  recentMessages,
   models,
   removeSession,
   setModel,
@@ -22,6 +28,7 @@ import {
   type OpenCodeClient,
   type Permissions,
 } from "../opencode";
+import { questionGuard } from "../question-guard";
 import { getSetting, setSetting } from "../settings";
 
 export const AUTOPILOT_MS = 4 * 60 * 60 * 1000;
@@ -213,7 +220,9 @@ export function tasksRoutes(deps: TaskDeps): Hono {
   app.get("/api/tasks/:id", async (c) => {
     const row = findTask(db, c.req.param("id"));
     if (!row) return c.json({ error: "not found" }, 404);
-    const messageList = await messages(client, row.session_id);
+    // ?tail=N: only the newest messages, for the live refresh of a long chat.
+    const tail = Number(c.req.query("tail"));
+    const messageList = Number.isInteger(tail) && tail > 0 && tail <= 200 ? await recentMessages(client, row.session_id, tail) : await messages(client, row.session_id);
     return c.json({ task: toTask(row), messages: messageList });
   });
 
@@ -229,9 +238,11 @@ export function tasksRoutes(deps: TaskDeps): Hono {
   app.post("/api/tasks/:id/stop", async (c) => {
     const row = findTask(db, c.req.param("id"));
     if (!row) return c.json({ error: "not found" }, 404);
-    await interrupt(client, row.session_id);
+    // Kill the remote commands first: they must stop even if opencode is slow or down.
+    const killed = abortTaskExecs(row.id);
     db.run("UPDATE tasks SET status = 'stopped' WHERE id = ?", [row.id]);
-    audit(db, { actor: c.get("actor"), action: "stop", nodeId: row.node_id, taskId: row.id });
+    audit(db, { actor: c.get("actor"), action: "stop", nodeId: row.node_id, taskId: row.id, detail: { killed } });
+    await interrupt(client, row.session_id).catch(() => {});
     return c.json({ ok: true });
   });
 
@@ -273,6 +284,39 @@ export function tasksRoutes(deps: TaskDeps): Hono {
     const requestID = c.req.param("requestID");
     await reply(client, row.session_id, requestID, decision);
     audit(db, { actor: c.get("actor"), action: "permission", nodeId: row.node_id, taskId: row.id, detail: { requestID, decision } });
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/tasks/:id/forms", async (c) => {
+    const row = findTask(db, c.req.param("id"));
+    if (!row) return c.json({ error: "not found" }, 404);
+    return c.json(await listForms(client, row.session_id).catch(() => []));
+  });
+
+  app.post("/api/tasks/:id/forms/:formID/reply", async (c) => {
+    const row = findTask(db, c.req.param("id"));
+    if (!row) return c.json({ error: "not found" }, 404);
+    const body = await c.req.json().catch(() => null);
+    const answer: unknown = body?.answer;
+    const ok =
+      typeof answer === "object" && answer !== null && !Array.isArray(answer) &&
+      Object.values(answer).every((v) => ["string", "number", "boolean"].includes(typeof v) || (Array.isArray(v) && v.every((x) => typeof x === "string")));
+    if (!ok || JSON.stringify(answer).length > 64 * 1024) return c.json({ error: "answer must be an object of strings, numbers, booleans or string lists" }, 400);
+    const formID = c.req.param("formID");
+    await replyForm(client, row.session_id, formID, answer as FormAnswer);
+    questionGuard.answered(row.session_id, formID, answer as FormAnswer);
+    // The answer itself may hold anything the admin typed; the audit keeps only which fields were answered.
+    audit(db, { actor: c.get("actor"), action: "question_reply", nodeId: row.node_id, taskId: row.id, detail: { formID, fields: Object.keys(answer as object) } });
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/tasks/:id/forms/:formID/cancel", async (c) => {
+    const row = findTask(db, c.req.param("id"));
+    if (!row) return c.json({ error: "not found" }, 404);
+    const formID = c.req.param("formID");
+    await cancelForm(client, row.session_id, formID, "Пользователь не стал отвечать. Не задавай этот вопрос снова: продолжай без ответа или остановись и объясни, что нужно.");
+    questionGuard.answered(row.session_id, formID, null);
+    audit(db, { actor: c.get("actor"), action: "question_cancel", nodeId: row.node_id, taskId: row.id, detail: { formID } });
     return c.json({ ok: true });
   });
 

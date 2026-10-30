@@ -27,6 +27,9 @@ services:
     environment:
       DB_PATH: /data/sysadm.sqlite
       INFRA_DIR: /infra
+    # /data: database, backups (/data/backups), opencode binary (/data/opencode/bin), plugin files.
+    # Outbound access is needed to registry.npmjs.org (opencode install/upgrade), github.com (skills)
+    # and the web search provider, if one is enabled.
     volumes:
       - sysadm-data:/data
       - infra:/infra

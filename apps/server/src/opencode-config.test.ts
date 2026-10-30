@@ -3,13 +3,14 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "./db";
-import { buildOpencodeConfig, DEFAULT_OVERLAY, getOverlay, saveOverlay, validateOverlay, writeOpencodeConfig } from "./opencode-config";
+import { buildOpencodeConfig, DCP_PLUGIN, DEFAULT_OVERLAY, getOverlay, PROMPT_UPGRADES, saveOverlay, validateOverlay, writeOpencodeConfig } from "./opencode-config";
 
 const base = { $schema: "x", permissions: [{ action: "remote_exec", resource: "*", effect: "ask" }], policies: [{ action: "tool.use", resource: "shell:*", effect: "deny" }] };
 
 test("written config keeps the sysadm plugin first and the base security keys", () => {
-  const cfg = buildOpencodeConfig(base, "/app/plugin", { plugins: ["extra-plugin"], default_agent: "debugger" });
-  expect(cfg.plugins).toEqual([{ package: "/app/plugin" }, "extra-plugin"]);
+  const cfg = buildOpencodeConfig(base, "/app/plugin", { plugins: ["extra-plugin", "@tarquinen/opencode-dcp"], default_agent: "debugger" });
+  // DCP is always bundled once, at the pinned version.
+  expect(cfg.plugins).toEqual([{ package: "/app/plugin" }, DCP_PLUGIN, "extra-plugin"]);
   expect(cfg.policies).toEqual(base.policies);
   expect(cfg.permissions).toEqual(base.permissions);
   expect(cfg.default_agent).toBe("debugger");
@@ -33,4 +34,22 @@ test("the default overlay is seeded once, then the stored one wins", () => {
   expect(getOverlay(db)).toEqual(DEFAULT_OVERLAY);
   saveOverlay(db, { default_agent: "debugger" });
   expect(getOverlay(db)).toEqual({ default_agent: "debugger" });
+});
+
+test("a stored agent with an old shipped prompt is upgraded, an edited one is kept", () => {
+  const db = openDb(":memory:");
+  const [[, oldSysadmin, newSysadmin]] = PROMPT_UPGRADES as [[string, string, string]];
+  saveOverlay(db, { agents: { sysadmin: { mode: "primary", system: oldSysadmin }, debugger: { mode: "primary", system: "мой промпт" } } });
+  const overlay = getOverlay(db) as { agents: Record<string, { system: string }> };
+  expect(overlay.agents.sysadmin!.system).toBe(newSysadmin);
+  expect(overlay.agents.debugger!.system).toBe("мой промпт");
+  expect(newSysadmin).toContain("skill");
+  db.close();
+});
+
+test("every shipped prompt version upgrades to the current one", () => {
+  for (const [, from, to] of PROMPT_UPGRADES) {
+    expect(from).not.toBe(to);
+    expect(to).toContain("выполняются сразу, без подтверждения");
+  }
 });

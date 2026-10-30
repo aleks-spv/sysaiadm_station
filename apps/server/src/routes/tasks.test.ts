@@ -111,3 +111,36 @@ test("purge uses the retention setting", () => {
   insert(db, "t1", "idle", NOW - 8 * DAY);
   expect(purgeArchivedTasks(deps)).toBe(1);
 });
+
+test("questions: list, reply with a checked answer, cancel, audit without the answer text", async () => {
+  const { db } = setup();
+  insert(db, "t1", "waiting_permission");
+  const calls: Array<[string, unknown]> = [];
+  const client = {
+    session: {
+      form: {
+        list: async (i: unknown) => (calls.push(["list", i]), [{ id: "frm_1", sessionID: "ses_t1", title: "Что перезапустить?", fields: [] }]),
+        reply: async (i: unknown) => void calls.push(["reply", i]),
+        cancel: async (i: unknown) => void calls.push(["cancel", i]),
+      },
+    },
+  } as unknown as ReturnType<typeof makeClient>;
+  const app = new Hono();
+  app.use("*", async (c, next) => {
+    c.set("actor", "admin");
+    await next();
+  });
+  app.route("/", tasksRoutes({ db, client, infraDir: "/unused", now: () => NOW }));
+  const post = (path: string, body?: unknown) =>
+    app.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+
+  expect(((await (await app.request("/api/tasks/t1/forms")).json()) as Array<{ id: string }>)[0]!.id).toBe("frm_1");
+  expect((await post("/api/tasks/t1/forms/frm_1/reply", { answer: { svc: { nested: 1 } } })).status).toBe(400);
+  expect((await post("/api/tasks/t1/forms/frm_1/reply", { answer: { svc: "nginx", restart: true, hosts: ["a"] } })).status).toBe(200);
+  expect((await post("/api/tasks/t1/forms/frm_1/cancel")).status).toBe(200);
+  expect(calls.map(([k]) => k)).toEqual(["list", "reply", "cancel"]);
+  expect(calls[1]![1]).toEqual({ sessionID: "ses_t1", formID: "frm_1", answer: { svc: "nginx", restart: true, hosts: ["a"] } });
+  const audit = db.query<{ action: string; detail: string }, []>("SELECT action, detail FROM audit ORDER BY id").all();
+  expect(audit.map((a) => a.action)).toEqual(["question_reply", "question_cancel"]);
+  expect(audit[0]!.detail).not.toContain("nginx");
+});

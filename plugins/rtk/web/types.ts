@@ -38,4 +38,17 @@ export interface RtkStats {
   recent: RtkRun[]; // newest first, up to 50
 }
 
-// Routes: GET /stats → RtkStats; DELETE /stats → { ok: true } (clears the counters).
+export interface RtkVersion {
+  // external: RTK_BIN points to a binary managed elsewhere, so no upgrades from here.
+  mode: "managed" | "external";
+  current: string | null;
+  path: string | null;
+  latest: string | null;
+  updateAvailable: boolean;
+  busy: boolean;
+  error: string | null;
+  checkedAt: number | null;
+}
+
+// Routes: GET /stats → RtkStats; DELETE /stats → { ok: true } (clears the counters);
+// GET /version[?refresh=1] → RtkVersion (GitHub checked every 6 h); POST /upgrade → RtkVersion, installs the latest release.

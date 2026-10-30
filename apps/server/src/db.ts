@@ -109,6 +109,10 @@ const MIGRATIONS: string[] = [
     collected_at INTEGER NOT NULL
   );
   `,
+  // Login stored with the credential (user + password pairs); a node's own user still wins.
+  `
+  ALTER TABLE credentials ADD COLUMN user TEXT;
+  `,
 ];
 
 export function openDb(path: string): Database {

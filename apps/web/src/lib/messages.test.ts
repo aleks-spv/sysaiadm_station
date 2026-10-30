@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { groupItems, parseMessages, splitExec, toolCalls, usageOf } from "./messages";
+import { latestTodos, mergeTail, parseMessages, splitExec, streamKey, todoList, toolCalls, usageOf, type ToolCall } from "./messages";
 
 const sample: unknown[] = [
   { type: "agent.selected", id: "a0" },
@@ -36,6 +36,19 @@ test("parseMessages keeps user, text, reasoning, tools and errors in order", () 
   expect(calls[1]).toMatchObject({ status: "error", command: "rm -rf /", output: "denied" });
 });
 
+test("parseMessages fills empty parts from streamed deltas and appends parts the list does not have yet", () => {
+  const list = [
+    { type: "user", id: "u1", text: "hi", time: { created: 1 } },
+    { type: "assistant", id: "m1", content: [{ type: "reasoning", text: "" }, { type: "text", text: "" }] },
+  ];
+  const streamed = { [streamKey("m1", "reasoning", 0)]: "think", [streamKey("m1", "text", 0)]: "hel", [streamKey("m2", "text", 0)]: "next" };
+  const items = parseMessages(list, streamed);
+  expect(items.map((i) => [i.kind, "text" in i ? i.text : ""])).toEqual([["user", "hi"], ["reasoning", "think"], ["text", "hel"], ["text", "next"]]);
+  // Stored text wins over the stream and keeps the same id.
+  const done = parseMessages([list[0], { type: "assistant", id: "m1", content: [{ type: "text", text: "hello" }] }], { [streamKey("m1", "text", 0)]: "hel" });
+  expect(done[1]).toMatchObject({ id: streamKey("m1", "text", 0), text: "hello" });
+});
+
 test("usageOf sums tokens and keeps the last step as context size", () => {
   const usage = usageOf(sample);
   expect(usage).toMatchObject({ input: 400, output: 30, reasoning: 5, cacheRead: 50, lastContext: 300, agent: "build" });
@@ -50,8 +63,21 @@ test("splitExec separates exit code, streams and trailing notes", () => {
   expect(splitExec("plain text")).toBeNull();
 });
 
-test("groupItems joins consecutive reasoning and tools into one run of steps", () => {
-  const blocks = groupItems(parseMessages(sample));
-  expect(blocks.map((b) => b.kind)).toEqual(["user", "steps", "text", "steps", "error"]);
-  expect(blocks[1].kind === "steps" && blocks[1].steps.map((s) => s.kind)).toEqual(["reasoning", "tool"]);
+test("latestTodos reads the plan from the last completed todowrite call", () => {
+  const call = (status: ToolCall["status"], todos: unknown) => ({ ...toolCalls(parseMessages(sample))[0], name: "todowrite", status, command: JSON.stringify({ todos }) });
+  const done = call("completed", [{ content: "backup", status: "completed" }, { content: "upgrade", status: "in_progress" }, { content: "", status: "pending" }]);
+  expect(latestTodos([done, call("streaming", [])])).toEqual([{ content: "backup", status: "completed" }, { content: "upgrade", status: "in_progress" }]);
+  expect(todoList({ ...done, command: '{"todos":[' })).toBeNull();
+  expect(latestTodos([])).toBeNull();
+});
+
+test("mergeTail lays the fresh tail over the loaded history", () => {
+  const a = { id: "a" }, b = { id: "b", v: 1 }, c = { id: "c" };
+  const prev = [a, b];
+  expect(mergeTail(prev, [{ id: "b", v: 1 }])).toBe(prev);
+  const next = mergeTail(prev, [{ id: "b", v: 2 }, c])!;
+  expect(next).toEqual([a, { id: "b", v: 2 }, c]);
+  expect(next[0]).toBe(a);
+  expect(mergeTail(prev, [{ id: "x" }])).toBeNull();
+  expect(mergeTail(prev, [])).toBeNull();
 });

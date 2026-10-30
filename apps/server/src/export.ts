@@ -44,6 +44,8 @@ interface ExportCredential {
   id: string;
   name: string;
   type: "key" | "password";
+  // Missing in files exported before credentials carried a login.
+  user?: string | null;
   // The vault payload ({password} or {privateKey, passphrase?}); absent when exported without secrets.
   secret?: unknown;
 }
@@ -152,13 +154,13 @@ export function buildExport(db: Database, masterKey: Buffer, rootId: string | nu
     }));
   const used = new Set(nodes.map((n) => n.credentialId).filter((id): id is string => id !== null));
   const credentials = db
-    .query<{ id: string; name: string; type: "key" | "password"; ciphertext: Buffer; iv: Buffer; tag: Buffer }, []>(
-      "SELECT id, name, type, ciphertext, iv, tag FROM credentials",
+    .query<{ id: string; name: string; type: "key" | "password"; user: string | null; ciphertext: Buffer; iv: Buffer; tag: Buffer }, []>(
+      "SELECT id, name, type, user, ciphertext, iv, tag FROM credentials",
     )
     .all()
     .filter((c) => used.has(c.id))
     .map((c): ExportCredential => {
-      const base = { id: c.id, name: c.name, type: c.type };
+      const base = { id: c.id, name: c.name, type: c.type, user: c.user };
       if (!withSecrets) return base;
       return { ...base, secret: JSON.parse(open(masterKey, { ciphertext: c.ciphertext, iv: c.iv, tag: c.tag }, c.id).toString("utf8")) };
     });
@@ -176,7 +178,8 @@ export function applyExport(db: Database, masterKey: Buffer, payload: ExportPayl
     if (bad) throw new ExportError(`в файле некорректный узел «${String(n.name).slice(0, 60)}»`);
   }
   for (const cred of payload.credentials) {
-    if (typeof cred.id !== "string" || typeof cred.name !== "string" || (cred.type !== "key" && cred.type !== "password")) {
+    if (typeof cred.id !== "string" || typeof cred.name !== "string" || (cred.type !== "key" && cred.type !== "password") ||
+      (cred.user != null && (typeof cred.user !== "string" || cred.user.length > 64))) {
       throw new ExportError("в файле некорректная учётка");
     }
   }
@@ -192,8 +195,8 @@ export function applyExport(db: Database, masterKey: Buffer, payload: ExportPayl
       if (cred.secret !== undefined) {
         const id = crypto.randomUUID();
         const sealed = seal(masterKey, JSON.stringify(cred.secret), id);
-        db.run("INSERT INTO credentials (id, name, type, ciphertext, iv, tag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
-          id, cred.name, cred.type, sealed.ciphertext, sealed.iv, sealed.tag, now,
+        db.run("INSERT INTO credentials (id, name, type, user, ciphertext, iv, tag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+          id, cred.name, cred.type, cred.user ?? null, sealed.ciphertext, sealed.iv, sealed.tag, now,
         ]);
         credIds.set(cred.id, id);
         createdCreds++;

@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
+import { isReadOnly } from "./readonly";
 
-export type Verdict = "deny" | "dangerous" | "normal";
+export type Verdict = "deny" | "read" | "dangerous" | "normal";
 
 // Best-effort only: regexes over the whole command line, case-insensitive. Not a shell parser.
 const DENY = [
@@ -43,7 +44,10 @@ export interface GuardExtra {
 
 export function classify(command: string, extra: GuardExtra = {}): Verdict {
   if ([...DENY, ...(extra.deny ?? [])].some((re) => re.test(command))) return "deny";
-  if ([...DANGEROUS, ...(extra.dangerous ?? [])].some((re) => re.test(command))) return "dangerous";
+  const extraDangerous = (extra.dangerous ?? []).some((re) => re.test(command));
+  // Before DANGEROUS on purpose: `iptables -L` and `ufw status` only read.
+  if (!extraDangerous && isReadOnly(command)) return "read";
+  if (extraDangerous || DANGEROUS.some((re) => re.test(command))) return "dangerous";
   return "normal";
 }
 

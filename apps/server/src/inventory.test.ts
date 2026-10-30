@@ -46,6 +46,16 @@ test("credential and user are taken from the nearest ancestor that sets them", (
   expect(eff.port).toBe(22);
 });
 
+test("the credential's login is used only when no node on the path sets a user", () => {
+  db.run("UPDATE credentials SET user = 'admin' WHERE id = 'cred-root'");
+  const root = company();
+  updateNode(db, root.id, { credentialId: "cred-root" });
+  const plain = vm(root.id, "vm-01", "10.0.0.5");
+  const own = vm(root.id, "vm-02", "10.0.0.6", { user: "ops" });
+  expect(resolveEffective(db, plain.id).user).toBe("admin");
+  expect(resolveEffective(db, own.id).user).toBe("ops");
+});
+
 test("moving a node into its own subtree is rejected", () => {
   const root = company();
   const host = vm(root.id, "vm-01", "10.0.0.5");
@@ -151,6 +161,28 @@ test("deleting a parent with children or a bastion in use is refused", () => {
   expect(() => deleteNode(db, bastion.id)).toThrow("IS_JUMP_HOST");
   expect(dependentsOfJump(db, bastion.id)).toEqual([host.id]);
   expect(descendants(db, root.id).sort()).toEqual([bastion.id, host.id].sort());
+});
+
+test("recursive delete removes the subtree and its tasks, but not a bastion used from outside", () => {
+  const root = company();
+  const group = createNode(db, { parentId: root.id, kind: "group", name: "g" });
+  const bastion = vm(group.id, "bastion", "bastion.example.test");
+  const host = vm(group.id, "vm-01", "10.0.0.5", { jumpMode: "via", jumpNodeId: bastion.id });
+  db.run("INSERT INTO tasks (id, node_id, session_id, title, status, created_at) VALUES ('t1', ?, 'ses1', 'x', 'idle', 0)", [host.id]);
+  const other = company();
+  const outsider = vm(other.id, "out", "10.0.0.9", { jumpMode: "via", jumpNodeId: bastion.id });
+
+  expect(() => deleteNode(db, group.id, { recursive: true })).toThrow("IS_JUMP_HOST");
+  deleteNode(db, outsider.id);
+  db.run("UPDATE tasks SET status = 'running'");
+  expect(() => deleteNode(db, group.id, { recursive: true })).toThrow("TASK_RUNNING");
+  db.run("UPDATE tasks SET status = 'idle'");
+
+  const result = deleteNode(db, root.id, { recursive: true });
+  expect(result.nodeIds.sort()).toEqual([root.id, group.id, bastion.id, host.id].sort());
+  expect(result.sessions).toEqual(["ses1"]);
+  expect(getNode(db, root.id)).toBeNull();
+  expect(db.query("SELECT COUNT(*) AS n FROM tasks").get()).toEqual({ n: 0 });
 });
 
 test("findByAddress uses port 22 by default", () => {

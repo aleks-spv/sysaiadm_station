@@ -31,16 +31,6 @@ async function pruneDir(dir: string, keep: Set<string>): Promise<void> {
   }
 }
 
-function treePath(byId: Map<string, InventoryNode>, id: string): string[] {
-  const names: string[] = [];
-  let cur = byId.get(id);
-  while (cur) {
-    names.unshift(cur.name);
-    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
-  }
-  return names;
-}
-
 function defaultShell(os: OsKind): ShellKind {
   return os === "windows" ? "powershell" : "bash";
 }
@@ -51,6 +41,7 @@ function agentsMd(
   eff: EffectiveNode | null,
   routeError: string | null,
   facts: NodeFacts | null,
+  skills: Array<{ id: string; description: string }>,
 ): string {
   const address = eff?.address || node.address || "не задан";
   const shell = eff?.shell ?? node.shell ?? defaultShell(node.os);
@@ -62,13 +53,21 @@ function agentsMd(
   } else route = "напрямую";
   const notes = eff?.notesChain.length ? eff.notesChain.join("\n\n") : "нет";
   const card = facts ? ["", factsMarkdown(facts)] : [];
+  // The admin picks skills per node; the list here turns opencode's "available" into "load before you start".
+  const skillList = skills.length
+    ? [
+        "",
+        "## Скилы этого сервера",
+        "Админ подключил их к этому серверу. До первой команды загрузи инструментом `skill` те, что относятся к задаче, и следуй им.",
+        ...skills.map((s) => `- \`${s.id}\` — ${s.description || "без описания"}`),
+      ]
+    : [];
 
   return [
     `Ты сисадмин-агент. Сервер этой сессии: ${node.name}, ${address}, ОС ${node.os}, оболочка ${shell}.`,
     `Доступ: ${route}.`,
     "Команды выполняй только инструментом `remote_exec`. Локальной машины нет.",
-    "",
-    `Путь в дереве: ${treePath(byId, node.id).join(" / ")}`,
+    ...skillList,
     ...card,
     "",
     "## Заметки",
@@ -95,16 +94,17 @@ export async function materializeNode(db: Database, infraDir: string, nodeId: st
     else throw err;
   }
 
-  const skills = new Map<string, string>();
+  const skills = new Map<string, { content: string; description: string }>();
   for (const skillId of eff ? Object.keys(eff.skillSources) : []) {
-    const row = db.query<{ content: string }, [string]>("SELECT content FROM skills WHERE id = ?").get(safeId(skillId));
-    if (row) skills.set(skillId, row.content);
+    const row = db.query<{ content: string; description: string }, [string]>("SELECT content, description FROM skills WHERE id = ?").get(safeId(skillId));
+    if (row) skills.set(skillId, row);
   }
+  const skillList = [...skills].map(([id, s]) => ({ id, description: s.description }));
 
   const dir = nodeDir(infraDir, nodeId);
-  await writeAtomic(join(dir, "AGENTS.md"), agentsMd(node, byId, eff, routeError, getFacts(db, nodeId)));
+  await writeAtomic(join(dir, "AGENTS.md"), agentsMd(node, byId, eff, routeError, getFacts(db, nodeId), skillList));
   const skillsRoot = join(dir, ".opencode", "skills");
-  for (const [skillId, content] of skills) {
+  for (const [skillId, { content }] of skills) {
     await writeAtomic(join(skillsRoot, skillId, "SKILL.md"), content);
   }
   await pruneDir(skillsRoot, new Set(skills.keys()));

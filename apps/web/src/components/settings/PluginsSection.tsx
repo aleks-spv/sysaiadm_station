@@ -48,7 +48,7 @@ export default function PluginsSection() {
                 </div>
                 <p className="text-xs text-muted-foreground">{p.description}</p>
               </div>
-              {p.enabled && web?.Page && (
+              {p.enabled && web?.Page && web.placement !== "settings" && (
                 <Button variant="ghost" size="sm" asChild>
                   <Link to={`/plugins/${p.id}`}>{t("common.open")}</Link>
                 </Button>

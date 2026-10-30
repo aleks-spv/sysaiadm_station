@@ -42,6 +42,14 @@ describe("applyImport", () => {
     expect(res.createdIds).toEqual([db.query<{ id: string }, []>("SELECT id FROM nodes WHERE name = 'prod'").get()!.id]);
   });
 
+  test("top-level groups imported to the root become organizations", () => {
+    expect(previewImport(db, tree(), null).items.filter((i) => i.kind !== "vm").map((i) => i.kind)).toEqual(["company", "group"]);
+    applyImport(db, tree(), null, { skipKeys: [] });
+    const kind = (name: string) => db.query<{ kind: string }, [string]>("SELECT kind FROM nodes WHERE name = ?").get(name)?.kind;
+    expect(kind("prod")).toBe("company");
+    expect(kind("web")).toBe("group");
+  });
+
   test("repeat apply of the same tree creates nothing and skips the 3 hosts", () => {
     applyImport(db, tree(), root, { skipKeys: [] });
     const before = count();

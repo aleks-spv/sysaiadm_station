@@ -58,7 +58,7 @@ export function importRoutes(deps: { db: Database; infraDir: string; now?: () =>
     prune();
     const token = crypto.randomUUID();
     pending.set(token, { tree, parentId: parentRaw, expires: now() + TOKEN_TTL_MS });
-    return c.json({ token, preview: previewImport(deps.db, tree) });
+    return c.json({ token, preview: previewImport(deps.db, tree, parentRaw) });
   });
 
   app.post("/api/import/apply", async (c) => {

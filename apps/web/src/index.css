@@ -5,6 +5,23 @@
 @import "@fontsource-variable/geist-mono";
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/jetbrains-mono";
+/* Picked in Settings → General; the browser downloads a face only when it is in use. */
+@import "@fontsource-variable/onest";
+@import "@fontsource-variable/manrope";
+@import "@fontsource-variable/golos-text";
+@import "@fontsource-variable/rubik";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource-variable/fira-code";
+@import "@fontsource-variable/cascadia-code";
+@import "@fontsource-variable/source-code-pro";
+@import "@fontsource-variable/roboto-mono";
+@import "@fontsource-variable/martian-mono";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/700.css";
+@import "@fontsource/ubuntu-mono/400.css";
+@import "@fontsource/ubuntu-mono/700.css";
 @source "../../../plugins";
 
 @custom-variant dark (&:is(.dark *));

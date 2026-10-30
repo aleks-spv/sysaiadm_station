@@ -12,6 +12,7 @@ import {
   MessageSquarePlus,
   Monitor,
   Moon,
+  PanelLeftClose,
   Pencil,
   Plus,
   Search,
@@ -19,6 +20,7 @@ import {
   Settings,
   Shield,
   Sun,
+  Trash2,
   Upload,
   Zap,
 } from "lucide-react";
@@ -44,6 +46,15 @@ import { lang, LANGS, setLang } from "@/i18n";
 import { t as tr } from "@/i18n/app";
 
 const KIND_ICON: Record<NodeKind, typeof Server> = { company: Building2, group: Folder, hypervisor: Server, vm: Monitor };
+// One hue per kind so the tree reads at a glance; lighter shades on the dark theme.
+const KIND_COLOR: Record<NodeKind, string> = {
+  company: "text-primary",
+  group: "text-sky-600 dark:text-sky-400",
+  hypervisor: "text-violet-600 dark:text-violet-400",
+  vm: "text-emerald-600 dark:text-emerald-400",
+};
+const TREE_ERRORS = ["IS_JUMP_HOST", "TASK_RUNNING", "MOVE_CYCLE"] as const;
+const DRAG_TYPE = "application/x-sysadm-node";
 const TASKS_SHOWN = 8;
 
 export const STATUS_DOT: Record<Task["status"], string> = {
@@ -100,15 +111,18 @@ interface Props {
   onImport: (parentId: string | null) => void;
   onExport: (nodeId: string) => void;
   onSettings: () => void;
+  onCollapse: () => void;
 }
 
-export default function Sidebar({ width, onAdd, onImport, onExport, onSettings }: Props) {
+export default function Sidebar({ width, onAdd, onImport, onExport, onSettings, onCollapse }: Props) {
   const { pathname } = useLocation();
   const plugins = useEnabledPlugins();
-  const pluginLinks = plugins.filter((p) => p.Page);
+  const pluginLinks = plugins.filter((p) => p.Page && p.placement !== "settings");
   const nodeActions = plugins.flatMap((p) => p.nodeActions ?? []);
   const [action, setAction] = useState<{ node: InventoryNode; Dialog: NodeAction["Dialog"] } | null>(null);
   const [renaming, setRenaming] = useState<InventoryNode | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropId, setDropId] = useState<string | null>(null);
   const { id: selectedId, taskId } = useParams();
   const navigate = useNavigate();
   const [nodes, setNodes] = useState<InventoryNode[]>([]);
@@ -154,6 +168,12 @@ export default function Sidebar({ width, onAdd, onImport, onExport, onSettings }
   }, [selectedId, nodes]);
 
   const rows = useMemo(() => flatten(nodes, open, query), [nodes, open, query]);
+  const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  // True when `id` is `ancestorId` or lies below it.
+  const inside = (id: string | null, ancestorId: string): boolean => {
+    for (let cur = id; cur; cur = byId.get(cur)?.parentId ?? null) if (cur === ancestorId) return true;
+    return false;
+  };
   const parents = useMemo(() => new Set(nodes.map((n) => n.parentId)), [nodes]);
   const jumpHosts = useMemo(() => new Set(nodes.map((n) => n.jumpNodeId).filter((x): x is string => !!x)), [nodes]);
   const tasksByNode = useMemo(() => {
@@ -178,6 +198,42 @@ export default function Sidebar({ width, onAdd, onImport, onExport, onSettings }
       else next.add(id);
       return next;
     });
+
+  const treeError = (err: unknown) => {
+    const code = errorText(err);
+    return (TREE_ERRORS as readonly string[]).includes(code) ? tr(`sidebar.err.${code as (typeof TREE_ERRORS)[number]}`) : code;
+  };
+
+  const remove = async (node: InventoryNode) => {
+    const count = nodes.filter((n) => inside(n.id, node.id)).length;
+    const question = count > 1 ? tr("sidebar.confirmDeleteTree", { name: node.name, count }) : tr("node.confirmDelete", { name: node.name });
+    if (!window.confirm(question)) return;
+    try {
+      await api.deleteNode(node.id, count > 1);
+      if (selectedId && inside(selectedId, node.id)) navigate("/");
+      reload();
+    } catch (err) {
+      setError(treeError(err));
+    }
+  };
+
+  // Drop targets: any non-VM node outside the dragged subtree that is not already its parent.
+  const canDrop = (target: InventoryNode) =>
+    !!dragId && target.kind !== "vm" && target.id !== byId.get(dragId)?.parentId && !inside(target.id, dragId);
+
+  const move = async (target: InventoryNode) => {
+    const id = dragId;
+    setDragId(null);
+    setDropId(null);
+    if (!id || !canDrop(target)) return;
+    try {
+      await api.moveNode(id, target.id);
+      setOpen((prev) => new Set(prev).add(target.id));
+      reload();
+    } catch (err) {
+      setError(treeError(err));
+    }
+  };
 
   const archive = async (t: Task) => {
     try {
@@ -222,7 +278,7 @@ export default function Sidebar({ width, onAdd, onImport, onExport, onSettings }
           </Tooltip>
           <DropdownMenuContent align="end" className="w-48">
             <DropdownMenuItem onSelect={() => onAdd({ parent: null })}>
-              <Building2 /> {tr("kind.company")}
+              <Building2 className={KIND_COLOR.company} /> {tr("kind.company")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => onImport(null)}>
@@ -230,6 +286,14 @@ export default function Sidebar({ width, onAdd, onImport, onExport, onSettings }
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon-sm" onClick={onCollapse} aria-label={tr("sidebar.hidePanel")}>
+              <PanelLeftClose />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{tr("sidebar.hidePanel")} · Ctrl+B</TooltipContent>
+        </Tooltip>
       </header>
 
       <div className="px-3 pb-2">
@@ -262,9 +326,32 @@ export default function Sidebar({ width, onAdd, onImport, onExport, onSettings }
                 <ContextMenuTrigger asChild>
               <div
                 style={{ paddingLeft: depth * 12 }}
+                draggable={node.kind !== "company"}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData(DRAG_TYPE, node.id);
+                  e.dataTransfer.effectAllowed = "move";
+                  setDragId(node.id);
+                }}
+                onDragEnd={() => {
+                  setDragId(null);
+                  setDropId(null);
+                }}
+                onDragOver={(e) => {
+                  if (!canDrop(node)) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  setDropId(node.id);
+                }}
+                onDragLeave={() => setDropId((prev) => (prev === node.id ? null : prev))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  void move(node);
+                }}
                 className={cn(
                   "group flex h-7 items-center gap-1 rounded-md pr-1 transition-colors",
                   selected && !taskId ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-accent/60",
+                  dragId === node.id && "opacity-50",
+                  dropId === node.id && "bg-primary/15 ring-1 ring-primary",
                 )}
               >
                 <button
@@ -274,8 +361,8 @@ export default function Sidebar({ width, onAdd, onImport, onExport, onSettings }
                 >
                   <ChevronRight className={cn("size-3.5 transition-transform", open.has(node.id) && "rotate-90")} />
                 </button>
-                <Link to={`/nodes/${node.id}`} className="flex min-w-0 flex-1 items-center gap-2" title={`${KIND_LABEL[node.kind]}${node.address ? ` · ${node.address}` : ""}`}>
-                  <Icon className={cn("size-3.5 shrink-0", node.kind === "company" ? "text-primary" : "text-muted-foreground")} />
+                <Link to={`/nodes/${node.id}`} draggable={false} className="flex min-w-0 flex-1 items-center gap-2" title={`${KIND_LABEL[node.kind]}${node.address ? ` · ${node.address}` : ""}`}>
+                  <Icon className={cn("size-3.5 shrink-0", KIND_COLOR[node.kind])} />
                   <span className={cn("truncate", node.kind === "company" && "font-medium")}>{node.name}</span>
                 </Link>
                 {autopilot && <Zap className="size-3 shrink-0 text-destructive" aria-label={tr("sidebar.autopilot")} />}
@@ -285,7 +372,16 @@ export default function Sidebar({ width, onAdd, onImport, onExport, onSettings }
                 ) : running ? (
                   <span className="size-2 shrink-0 animate-pulse rounded-full bg-primary" title={tr("sidebar.working")} />
                 ) : null}
-                {node.kind !== "vm" && (
+                {node.kind === "vm" ? (
+                  <Link
+                    to={`/nodes/${node.id}`}
+                    className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-background/60 hover:text-foreground group-hover:opacity-100"
+                    aria-label={tr("sidebar.newTask")}
+                    title={tr("sidebar.newTask")}
+                  >
+                    <MessageSquarePlus className="size-3.5" />
+                  </Link>
+                ) : (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
@@ -297,13 +393,13 @@ export default function Sidebar({ width, onAdd, onImport, onExport, onSettings }
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start" className="w-48">
                       <DropdownMenuItem onSelect={() => onAdd({ parent: node, kind: "group" })}>
-                        <Folder /> {tr("kind.group")}
+                        <Folder className={KIND_COLOR.group} /> {tr("kind.group")}
                       </DropdownMenuItem>
                       <DropdownMenuItem onSelect={() => onAdd({ parent: node, kind: "hypervisor" })}>
-                        <Server /> {tr("kind.hypervisor")}
+                        <Server className={KIND_COLOR.hypervisor} /> {tr("kind.hypervisor")}
                       </DropdownMenuItem>
                       <DropdownMenuItem onSelect={() => onAdd({ parent: node, kind: "vm" })}>
-                        <Monitor /> {tr("kind.vm")}
+                        <Monitor className={KIND_COLOR.vm} /> {tr("kind.vm")}
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onSelect={() => onImport(node.id)}>
@@ -324,6 +420,9 @@ export default function Sidebar({ width, onAdd, onImport, onExport, onSettings }
                   <ContextMenuItem onSelect={() => onExport(node.id)}>
                     <Download /> {tr("sidebar.export")}
                   </ContextMenuItem>
+                  <ContextMenuItem className="text-destructive focus:text-destructive" onSelect={() => void remove(node)}>
+                    <Trash2 /> {tr("sidebar.delete")}
+                  </ContextMenuItem>
                   {nodeActions.some((a) => !a.kinds || a.kinds.includes(node.kind)) && <ContextMenuSeparator />}
                   {nodeActions
                     .filter((a) => !a.kinds || a.kinds.includes(node.kind))
@@ -337,17 +436,6 @@ export default function Sidebar({ width, onAdd, onImport, onExport, onSettings }
 
               {selected && (
                 <ul className="py-0.5" style={{ paddingLeft: depth * 12 + 20 }}>
-                  <li>
-                    <Link
-                      to={`/nodes/${node.id}`}
-                      className={cn(
-                        "flex h-7 items-center gap-2 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-foreground",
-                        !taskId && "text-primary",
-                      )}
-                    >
-                      <MessageSquarePlus className="size-3.5" /> {tr("sidebar.newTask")}
-                    </Link>
-                  </li>
                   {nodeTasks.length > 0 && (
                     <li>
                       <button

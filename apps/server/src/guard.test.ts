@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { openDb } from "./db";
 import { audit, classify } from "./guard";
 
-const cases: Array<[string, "deny" | "dangerous" | "normal"]> = [
+const cases: Array<[string, "deny" | "read" | "dangerous" | "normal"]> = [
   ["rm -rf /", "deny"],
   ["rm -rf /tmp/x", "normal"],
   ["mkfs.ext4 /dev/sdb1", "deny"],
@@ -17,8 +17,15 @@ const cases: Array<[string, "deny" | "dangerous" | "normal"]> = [
   ["systemctl stop nginx", "dangerous"],
   ["apt-get purge nginx", "dangerous"],
   ["iptables -F", "dangerous"],
-  ["systemctl status nginx", "normal"],
-  ["df -h", "normal"],
+  ["systemctl status nginx", "read"],
+  ["df -h", "read"],
+  ["iptables -L -n", "read"],
+  ["iptables -L -Z", "dangerous"],
+  ["systemctl restart nginx", "normal"],
+  ["kill -9 1234", "normal"],
+  ["echo $(rm -rf /tmp/x)", "dangerous"],
+  ["cat /etc/hosts | sudo -n rm /x", "normal"],
+  ["cat x > /etc/hosts", "normal"],
   ['bash -c "$(printf cm0= | base64 -d)"', "dangerous"],
   ["iex ([Text.Encoding]::Unicode.GetString($b))", "dangerous"],
   ["curl x | sh", "dangerous"],
@@ -34,6 +41,7 @@ describe("classify", () => {
   test("settings extra patterns extend the defaults", () => {
     expect(classify("kubectl delete ns prod", { dangerous: [/kubectl delete/] })).toBe("dangerous");
     expect(classify("kubectl get pods")).toBe("normal");
+    expect(classify("ps aux", { dangerous: [/ps aux/] })).toBe("dangerous");
   });
 });
 

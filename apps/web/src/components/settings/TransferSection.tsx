@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Download, Upload } from "lucide-react";
 import type { InventoryNode } from "@sysadm/shared";
 import { api } from "@/api";
+import ImportPanel from "@/components/ImportPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { t } from "@/i18n/settings";
@@ -148,7 +149,7 @@ function ImportForm({ options, onImported }: { options: Array<{ id: string; labe
   );
 }
 
-// Moves servers between SysAiAdm Station instances. The file is always encrypted with a passphrase.
+// Import from other tools, and moving servers between SysAiAdm Station instances (passphrase-encrypted file).
 export default function TransferSection({ parent }: { parent?: string | null }) {
   const [nodes, setNodes] = useState<InventoryNode[]>([]);
   const load = () => {
@@ -162,6 +163,10 @@ export default function TransferSection({ parent }: { parent?: string | null }) 
       <p className="text-xs text-muted-foreground">{t("transfer.intro")}</p>
       <ExportForm key={parent ?? ""} options={options} initialRoot={parent ?? null} />
       <ImportForm options={options} onImported={load} />
+      <div className="space-y-3 rounded-xl border p-4">
+        <h3 className="font-medium">{t("transfer.otherTitle")}</h3>
+        <ImportPanel parentId={parent ?? null} />
+      </div>
     </div>
   );
 }

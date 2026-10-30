@@ -1,10 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
-import { Brain, Check, ChevronRight, CircleCheck, CircleX, Copy, LoaderCircle, MessageCircleQuestion, ShieldQuestion, Sparkles, TerminalSquare } from "lucide-react";
+import { Brain, Check, ChevronRight, CircleCheck, CircleX, Copy, Globe, ListTodo, LoaderCircle, MessageCircleQuestion, Pin, Sparkles, Square, TerminalSquare, Wrench } from "lucide-react";
 import Markdown from "@/components/Markdown";
-import { groupItems, type ChatItem, type StepItem, type ToolCall } from "@/lib/messages";
+import { colorize, parseAnsi } from "@/lib/ansi";
+import { todoList, type ChatItem, type ToolCall } from "@/lib/messages";
 import { usePrefs } from "@/lib/prefs";
+import { APP_ANSI_DARK, APP_ANSI_LIGHT, terminalPalette, type TerminalPalette } from "@/lib/terminalThemes";
+import { resolvedTheme } from "@/theme";
 import { cn } from "@/lib/utils";
 import { t as tr } from "@/i18n/app";
+
+function formatTime(epoch: number): string {
+  const d = new Date(epoch);
+  const now = new Date();
+  const today = now.getFullYear() === d.getFullYear() && now.getMonth() === d.getMonth() && now.getDate() === d.getDate();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (today) return time;
+  const date = d.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `${date} ${time}`;
+}
 
 // Re-renders every second while something runs, for live durations.
 function useNow(active: boolean): number {
@@ -27,23 +40,29 @@ function duration(ms: number): string {
 const running = (c: ToolCall) => c.status === "running" || c.status === "streaming";
 const failed = (c: ToolCall) => c.status === "error" || (c.exitCode !== null && c.exitCode !== 0);
 
-function toolLabel(call: ToolCall): { icon: typeof TerminalSquare; text: string } {
-  if (call.name === "remote_exec") return { icon: TerminalSquare, text: call.command };
-  if (call.name === "skill") {
-    const name = /"name":"([^"]+)"/.exec(call.command)?.[1];
-    return { icon: Sparkles, text: tr("steps.skill", { name: name ?? "" }).trim() };
+// One tool row: what kind of tool, and the short detail next to it.
+function toolLabel(call: ToolCall): { icon: typeof TerminalSquare; title: string; detail: string } {
+  switch (call.name) {
+    case "remote_exec":
+      return { icon: TerminalSquare, title: tr("tool.exec"), detail: call.command };
+    case "skill":
+      // opencode V2 sends {"id": ...}; "name" is the older shape.
+      return { icon: Sparkles, title: tr("tool.skill"), detail: /"(?:id|name)":\s*"([^"]+)"/.exec(call.command)?.[1] ?? "" };
+    case "web_search":
+      return { icon: Globe, title: tr("tool.search"), detail: /"query":\s*"((?:[^"\\]|\\.)*)"/.exec(call.command)?.[1] ?? "" };
+    case "question":
+      return { icon: MessageCircleQuestion, title: tr("tool.question"), detail: "" };
+    case "todowrite": {
+      const list = todoList(call) ?? [];
+      const current = list.find((t) => t.status === "in_progress")?.content ?? "";
+      return { icon: ListTodo, title: tr("tool.todo", { done: list.filter((t) => t.status === "completed").length, total: list.length }), detail: current };
+    }
+    default:
+      return { icon: Wrench, title: call.name, detail: call.command };
   }
-  if (call.name === "question") return { icon: MessageCircleQuestion, text: tr("steps.question") };
-  return { icon: TerminalSquare, text: `${call.name} ${call.command}`.trim() };
 }
 
-// First meaningful line of reasoning, without markdown marks: the collapsed view of a thought.
-function firstLine(text: string): string {
-  const line = text.split("\n").find((l) => l.trim()) ?? "";
-  return line.replace(/[*_`#>]/g, "").trim();
-}
-
-function CopyButton({ text }: { text: string }) {
+function CopyButton({ text, className }: { text: string; className?: string }) {
   const [done, setDone] = useState(false);
   return (
     <button
@@ -57,45 +76,137 @@ function CopyButton({ text }: { text: string }) {
           setTimeout(() => setDone(false), 1200);
         });
       }}
-      className="rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover/step:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100"
+      className={cn("rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground", className)}
     >
       {done ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
     </button>
   );
 }
 
-function ToolStep({ call, expand }: { call: ToolCall; expand: boolean }) {
+const TODO_MARK: Record<string, string> = { completed: "✓", in_progress: "◐", cancelled: "✕", pending: "○" };
+
+const ANSI_KEYS = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+  "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"] as const;
+type AnsiColors = Record<(typeof ANSI_KEYS)[number], string>;
+
+// Output takes the terminal color scheme from Settings; "app" keeps the chat colors with a matching ANSI set.
+function useOutputColors(): { palette: TerminalPalette | null; ansi: AnsiColors } {
+  const { terminalTheme } = usePrefs();
+  const palette = terminalPalette(terminalTheme);
+  return { palette, ansi: palette ?? (resolvedTheme() === "dark" ? APP_ANSI_DARK : APP_ANSI_LIGHT) };
+}
+
+function Colored({ text, ansi, fg }: { text: string; ansi: AnsiColors; fg?: number }) {
+  // With a base color (stderr) only real ANSI codes apply, no word highlight.
+  const segments = useMemo(() => (fg === undefined ? colorize(text) : parseAnsi(text)), [text, fg]);
+  const css = (c: number | string | undefined) => (typeof c === "number" ? ansi[ANSI_KEYS[c]!] : c);
+  return segments.map((s, i) =>
+    s.fg === undefined && s.bg === undefined && !s.bold && !s.dim && fg === undefined ? (
+      s.text
+    ) : (
+      <span key={i} style={{ color: css(s.fg ?? fg), background: css(s.bg), fontWeight: s.bold ? 600 : undefined, opacity: s.dim ? 0.7 : undefined }}>
+        {s.text}
+      </span>
+    ),
+  );
+}
+
+function ToolDetails({ call }: { call: ToolCall }) {
+  // Unparsed output of a failed call (e.g. a denied command) is the error itself.
+  const errorOnly = call.status === "error" && call.exitCode === null;
+  const todos = call.name === "todowrite" ? todoList(call) : null;
+  const { palette, ansi } = useOutputColors();
+  return (
+    <div
+      className={cn("mt-1 mb-2 ml-6 overflow-hidden rounded-lg border font-mono text-[length:var(--code-size)] leading-relaxed", !palette && "bg-muted/40")}
+      style={palette && !todos ? { background: palette.background, color: palette.foreground } : undefined}
+    >
+      {todos ? (
+        <ul className="space-y-0.5 px-3 py-2 font-sans text-xs">
+          {todos.map((t, i) => (
+            <li key={i} className={cn("flex gap-2", t.status === "completed" && "text-muted-foreground line-through", t.status === "cancelled" && "text-muted-foreground")}>
+              <span className="w-3 shrink-0 text-center">{TODO_MARK[t.status] ?? "○"}</span>
+              <span>{t.content}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <>
+          {call.command && (
+            <div className={cn("group/cmd relative border-b", palette ? "bg-black/15" : "bg-background/60")}>
+              <pre className="max-h-48 overflow-auto px-3 py-2 pr-9 break-all whitespace-pre-wrap">
+                {call.name === "remote_exec" && <span className="select-none" style={{ color: ansi.green }}>$ </span>}
+                <span className="font-semibold">{call.command}</span>
+              </pre>
+              <CopyButton text={call.command} className="absolute top-1 right-1 opacity-0 group-hover/cmd:opacity-100" />
+            </div>
+          )}
+          {call.stdout && !errorOnly && (
+            <pre className="max-h-96 overflow-auto px-3 py-2 break-all whitespace-pre-wrap">
+              <Colored text={call.stdout} ansi={ansi} />
+            </pre>
+          )}
+          {(call.stderr || errorOnly) && (
+            <pre className={cn("max-h-64 overflow-auto bg-destructive/5 px-3 py-2 break-all whitespace-pre-wrap", call.stdout && !errorOnly && "border-t")}>
+              <Colored text={errorOnly ? call.output : call.stderr} ansi={ansi} fg={1} />
+            </pre>
+          )}
+          {!call.stdout && !call.stderr && !errorOnly && !running(call) && <p className="px-3 py-1.5 font-sans text-[11px] text-muted-foreground">{tr("tool.noOutput")}</p>}
+          {call.notes.map((n) => (
+            <p key={n} className="border-t px-3 py-1 font-sans text-[11px] text-muted-foreground">
+              {n.replace(/^\[|\]$/g, "")}
+            </p>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+// A tool call as one line; a click opens the full command and its result.
+function ToolRow({ call, expand, onStop }: { call: ToolCall; expand: boolean; onStop?: () => void }) {
   const [open, setOpen] = useState<boolean | null>(null);
   const isRunning = running(call);
   const bad = failed(call);
   const now = useNow(isRunning);
-  const shown = open ?? (expand || bad);
-  const hasOutput = !!(call.stdout || call.stderr || call.notes.length);
+  const shown = open ?? (call.name === "remote_exec" && (expand || bad));
   const end = call.finished ?? (isRunning ? now : null);
   const took = call.started && end ? end - call.started : null;
-  const { icon: Icon, text } = toolLabel(call);
-  // Unparsed output of a failed call (e.g. a denied command) is the error itself.
-  const errorOnly = call.status === "error" && call.exitCode === null;
+  const { icon: Icon, title, detail } = toolLabel(call);
+  const toggle = () => setOpen(!shown);
 
   return (
-    <li className="group/step">
+    <div>
       <div
         role="button"
         tabIndex={0}
-        aria-expanded={hasOutput ? shown : undefined}
-        onClick={() => hasOutput && setOpen(!shown)}
-        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && hasOutput && (e.preventDefault(), setOpen(!shown))}
-        className={cn("flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-xs", hasOutput && "cursor-pointer hover:bg-accent/50")}
+        aria-expanded={shown}
+        onClick={toggle}
+        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}
+        className="group/row flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1.5 text-xs hover:bg-accent/50"
       >
-        <ChevronRight className={cn("size-3 shrink-0 text-muted-foreground transition-transform", shown && "rotate-90", !hasOutput && "invisible")} />
-        <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-        <code className="min-w-0 flex-1 truncate font-mono text-[length:var(--code-size)]" title={text}>
-          {text}
+        <Icon className={cn("size-3.5 shrink-0", isRunning ? "text-primary" : bad ? "text-destructive" : "text-muted-foreground")} />
+        <span className="shrink-0 font-medium text-foreground/80">{title}</span>
+        <code className="min-w-0 flex-1 truncate font-mono text-[length:var(--code-size)] text-muted-foreground" title={detail}>
+          {detail}
         </code>
         {call.raw && <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">raw</span>}
         {call.exitCode !== null && call.exitCode !== 0 && <span className="rounded bg-destructive/15 px-1 font-mono text-[10px] text-destructive">exit {call.exitCode}</span>}
-        <CopyButton text={call.command} />
         {took !== null && <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{duration(took)}</span>}
+        {isRunning && onStop && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onStop();
+            }}
+            title={tr("composer.stopHint")}
+            className="flex shrink-0 items-center gap-1 rounded bg-destructive px-1.5 py-0.5 text-[11px] font-medium text-white hover:bg-destructive/90"
+          >
+            <Square className="size-2.5 fill-current" />
+            {tr("composer.stop")}
+          </button>
+        )}
         {isRunning ? (
           <LoaderCircle className="size-3.5 shrink-0 animate-spin text-primary" />
         ) : bad ? (
@@ -103,134 +214,172 @@ function ToolStep({ call, expand }: { call: ToolCall; expand: boolean }) {
         ) : (
           <CircleCheck className="size-3.5 shrink-0 text-emerald-500" />
         )}
+        <ChevronRight className={cn("size-3 shrink-0 text-muted-foreground transition-transform", shown && "rotate-90")} />
       </div>
-      {shown && hasOutput && (
-        <div className="mt-1 mb-2 ml-5 overflow-hidden rounded-lg border bg-muted/40 font-mono text-[length:var(--code-size)] leading-relaxed">
-          {call.stdout && !errorOnly && <pre className="max-h-96 overflow-auto px-3 py-2 break-all whitespace-pre-wrap">{call.stdout}</pre>}
-          {(call.stderr || errorOnly) && (
-            <pre className={cn("max-h-64 overflow-auto bg-destructive/5 px-3 py-2 break-all whitespace-pre-wrap text-destructive/90", call.stdout && !errorOnly && "border-t")}>
-              {errorOnly ? call.output : call.stderr}
-            </pre>
-          )}
-          {call.notes.map((n) => (
-            <p key={n} className="border-t px-3 py-1 font-sans text-[11px] text-muted-foreground">
-              {n.replace(/^\[|\]$/g, "")}
-            </p>
-          ))}
-        </div>
-      )}
-    </li>
+      {shown && <ToolDetails call={call} />}
+    </div>
   );
 }
 
-function ReasoningStep({ item, expand, streaming }: { item: Extract<StepItem, { kind: "reasoning" }>; expand: boolean; streaming: boolean }) {
-  const [open, setOpen] = useState<boolean | null>(null);
-  const shown = open ?? (expand || streaming);
+type Thought = Extract<ChatItem, { kind: "reasoning" }>;
+
+// Model reasoning as one line, collapsed; a click shows the full text.
+function ReasoningRow({ item }: { item: Thought }) {
+  const [open, setOpen] = useState(false);
+  const thinking = item.finished === null;
+  const now = useNow(thinking);
+  const end = item.finished ?? (thinking ? now : null);
+  const took = item.started && end ? end - item.started : null;
+  const toggle = () => setOpen(!open);
   return (
-    <li>
+    <div>
       <div
         role="button"
         tabIndex={0}
-        aria-expanded={shown}
-        onClick={() => setOpen(!shown)}
-        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setOpen(!shown))}
-        className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent/50"
+        aria-expanded={open}
+        onClick={toggle}
+        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}
+        className="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1.5 text-xs hover:bg-accent/50"
       >
-        <ChevronRight className={cn("mt-0.5 size-3 shrink-0 transition-transform", shown && "rotate-90")} />
-        <Brain className="mt-px size-3.5 shrink-0" />
-        {!shown && <span className="min-w-0 flex-1 truncate italic">{firstLine(item.text)}</span>}
-        {shown && (
-          <div className={cn("min-w-0 flex-1", streaming && "max-h-60 overflow-y-auto")} onClick={(e) => e.stopPropagation()}>
-            <Markdown text={item.text} className="text-xs leading-relaxed text-muted-foreground" />
-          </div>
-        )}
+        <Brain className={cn("size-3.5 shrink-0", thinking ? "text-primary" : "text-muted-foreground")} />
+        <span className="shrink-0 font-medium text-foreground/80">{tr("tool.reasoning")}</span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground italic">{item.text.trim().split("\n")[0]}</span>
+        {took !== null && <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{duration(took)}</span>}
+        <ChevronRight className={cn("size-3 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
       </div>
-    </li>
-  );
-}
-
-function stepsSummary(steps: StepItem[]): string {
-  const calls = steps.flatMap((s) => (s.kind === "tool" ? [s.call] : []));
-  const parts: string[] = [];
-  if (calls.length) parts.push(tr("steps.commands", { count: calls.length }));
-  const bad = calls.filter(failed).length;
-  if (bad) parts.push(tr("steps.failed", { count: bad }));
-  if (!calls.length) parts.push(tr("steps.reasoning"));
-  const starts = steps.map((s) => (s.kind === "tool" ? s.call.started : s.started)).filter((t): t is number => t !== null);
-  const ends = steps.map((s) => (s.kind === "tool" ? s.call.finished : s.finished)).filter((t): t is number => t !== null);
-  if (starts.length && ends.length) parts.push(duration(Math.max(...ends) - Math.min(...starts)));
-  return parts.join(" · ");
-}
-
-function Steps({ steps, active, working }: { steps: StepItem[]; active: boolean; working: boolean }) {
-  const prefs = usePrefs();
-  const [open, setOpen] = useState<boolean | null>(null);
-  const shown = open ?? active;
-  const last = steps[steps.length - 1];
-  const current = last.kind === "tool" && running(last.call) ? toolLabel(last.call).text : tr("steps.thinking");
-
-  return (
-    <div className="-mx-1.5">
-      <button
-        type="button"
-        onClick={() => setOpen(!shown)}
-        aria-expanded={shown}
-        className="flex max-w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:text-foreground"
-      >
-        {active && working ? (
-          <LoaderCircle className="size-3.5 shrink-0 animate-spin text-primary" />
-        ) : active ? (
-          <ShieldQuestion className="size-3.5 shrink-0 text-primary" />
-        ) : (
-          <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", shown && "rotate-90")} />
-        )}
-        <span className={cn("truncate", active && working && "shimmer")}>{active ? (working ? current : tr("steps.waiting")) : stepsSummary(steps)}</span>
-      </button>
-      {shown && (
-        <ol className="mt-0.5 ml-[13px] border-l pl-2">
-          {steps.map((s, i) =>
-            s.kind === "tool" ? (
-              <ToolStep key={s.id} call={s.call} expand={prefs.expandOutput} />
-            ) : (
-              <ReasoningStep key={s.id} item={s} expand={prefs.expandReasoning} streaming={active && i === steps.length - 1 && s.finished === null} />
-            ),
-          )}
-        </ol>
+      {open && (
+        <div className="mt-1 mb-2 ml-6 max-h-96 overflow-auto rounded-lg border bg-muted/40 px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
+          {item.text}
+        </div>
       )}
     </div>
   );
 }
 
-function Block({ item }: { item: Exclude<ChatItem, StepItem> }) {
+type Shown = Exclude<ChatItem, { kind: "reasoning" | "tool" }>;
+
+function Block({ item, onPin }: { item: Shown; onPin?: (messageId: string, pin: boolean) => void }) {
+  const [pinned, setPinned] = useState(false);
+  const togglePin = () => {
+    if (item.kind !== "user") return;
+    const next = !pinned;
+    setPinned(next);
+    onPin?.(item.messageId, next);
+  };
+
   switch (item.kind) {
     case "user":
       return (
-        <div className="flex justify-end">
+        <div id={`msg-${item.messageId}`} className="group/msg flex scroll-mt-12 flex-col items-end gap-1">
           <div className="max-w-[85%] rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">{item.text}</div>
+          <div className="flex items-center gap-0.5 text-[11px] text-muted-foreground">
+            <span className="mr-1 tabular-nums">{formatTime(item.time)}</span>
+            <button
+              type="button"
+              onClick={togglePin}
+              title={pinned ? tr("msg.unpin") : tr("msg.pin")}
+              className={cn("rounded p-1 hover:bg-accent hover:text-foreground", !pinned && "opacity-0 group-hover/msg:opacity-100")}
+            >
+              <Pin className={cn("size-3.5", pinned && "fill-current text-primary")} />
+            </button>
+            <CopyButton text={item.text} className="opacity-0 group-hover/msg:opacity-100" />
+          </div>
         </div>
       );
     case "text":
-      return <Markdown text={item.text} className="text-sm" />;
+      return (
+        <div className="group/msg">
+          <Markdown text={item.text} className="text-sm" />
+          <div className="mt-1 flex items-center gap-0.5 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover/msg:opacity-100">
+            <span className="mr-1 tabular-nums">{formatTime(item.time)}</span>
+            <CopyButton text={item.text} />
+          </div>
+        </div>
+      );
     case "error":
       return <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">{item.text}</div>;
   }
 }
 
-// The task conversation: answers as markdown, the work between them as one collapsible run of steps.
-// A live run stays open and shows what runs now; finished runs fold into a one-line summary.
-export default function Transcript({ items, live, working }: { items: ChatItem[]; live: boolean; working: boolean }) {
-  const blocks = useMemo(() => groupItems(items), [items]);
-  const lastIsSteps = blocks[blocks.length - 1]?.kind === "steps";
+type Step = ToolCall | Thought;
+type Run = { kind: "tools"; id: string; steps: Step[] } | Shown;
+const isThought = (s: Step): s is Thought => "kind" in s;
+
+// The task conversation, in order: answers as markdown, each tool call and reasoning block as one line
+// that opens to its full content.
+export default function Transcript({
+  items,
+  working,
+  onPin,
+  onStop,
+}: {
+  items: ChatItem[];
+  live: boolean;
+  working: boolean;
+  sessionID?: string;
+  onPin?: (messageId: string, pin: boolean) => void;
+  // Shown on the running command; undefined when there is nothing to stop.
+  onStop?: () => void;
+}) {
+  const prefs = usePrefs();
+  // Consecutive tool calls sit together as one tight list.
+  const runs = useMemo(() => {
+    const out: Run[] = [];
+    for (const item of items) {
+      if (item.kind === "reasoning" && !item.text.trim()) continue;
+      if (item.kind !== "tool" && item.kind !== "reasoning") {
+        out.push(item);
+        continue;
+      }
+      const step = item.kind === "tool" ? item.call : item;
+      const last = out[out.length - 1];
+      if (last?.kind === "tools") last.steps.push(step);
+      else out.push({ kind: "tools", id: item.id, steps: [step] });
+    }
+    return out;
+  }, [items]);
+  const userMessages = useMemo(() => items.flatMap((it) => (it.kind === "user" ? [it.messageId] : [])), [items]);
+  const [navIndex, setNavIndex] = useState(userMessages.length - 1);
+
+  useEffect(() => {
+    setNavIndex(userMessages.length - 1);
+  }, [userMessages.length]);
+
+  const scrollTo = (idx: number) => {
+    if (idx < 0 || idx >= userMessages.length) return;
+    setNavIndex(idx);
+    document.getElementById(`msg-${userMessages[idx]}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const last = runs[runs.length - 1];
+  const toolRuns = last?.kind === "tools" && last.steps.some((s) => (isThought(s) ? s.finished === null : running(s)));
   return (
     <>
-      {blocks.map((b, i) =>
-        b.kind === "steps" ? (
-          <Steps key={b.id} steps={b.steps} active={live && i === blocks.length - 1} working={working} />
+      {userMessages.length > 1 && (
+        <div className="sticky top-0 z-10 -mb-2 flex justify-center">
+          <div className="flex items-center gap-1 rounded-full border bg-background/90 px-1 py-0.5 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
+            <button type="button" onClick={() => scrollTo(navIndex - 1)} disabled={navIndex <= 0} className="rounded-full p-1 hover:bg-accent disabled:opacity-30" title={tr("msg.prevUser")}>
+              <ChevronRight className="size-3.5 -rotate-90" />
+            </button>
+            <span className="tabular-nums">
+              {navIndex + 1} / {userMessages.length}
+            </span>
+            <button type="button" onClick={() => scrollTo(navIndex + 1)} disabled={navIndex >= userMessages.length - 1} className="rounded-full p-1 hover:bg-accent disabled:opacity-30" title={tr("msg.nextUser")}>
+              <ChevronRight className="size-3.5 rotate-90" />
+            </button>
+          </div>
+        </div>
+      )}
+      {runs.map((r) =>
+        r.kind === "tools" ? (
+          <div key={r.id} className="-mx-1.5 flex flex-col gap-1.5">
+            {r.steps.map((s) => (isThought(s) ? <ReasoningRow key={s.id} item={s} /> : <ToolRow key={s.id} call={s} expand={prefs.expandOutput} onStop={onStop} />))}
+          </div>
         ) : (
-          <Block key={b.id} item={b} />
+          <Block key={r.id} item={r} onPin={onPin} />
         ),
       )}
-      {working && !lastIsSteps && (
+      {working && !toolRuns && (
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <LoaderCircle className="size-3.5 animate-spin text-primary" />
           <span className="shimmer">{tr("steps.thinking")}</span>

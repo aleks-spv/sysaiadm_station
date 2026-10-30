@@ -26,6 +26,7 @@ interface Row {
 interface Ctx {
   rows: Map<string, Row>;
   skills: Map<string, string[]>;
+  credentialUsers: Map<string, string>;
 }
 
 export interface NodeInput {
@@ -75,7 +76,11 @@ function loadCtx(db: Database): Ctx {
   for (const { node_id, skill_id } of pairs) {
     skills.set(node_id, [...(skills.get(node_id) ?? []), skill_id]);
   }
-  return { rows, skills };
+  const credentialUsers = new Map<string, string>();
+  for (const { id, user } of db.query<{ id: string; user: string }, []>("SELECT id, user FROM credentials WHERE user IS NOT NULL").all()) {
+    credentialUsers.set(id, user);
+  }
+  return { rows, skills, credentialUsers };
 }
 
 // Path from the node up to the root, node first.
@@ -181,7 +186,8 @@ function resolveIn(ctx: Ctx, id: string): EffectiveNode {
     os: node.os,
     address: node.address ?? "",
     port: port?.port ?? DEFAULT_PORT,
-    user: user?.user ?? null,
+    // A login set on the node or its parents wins over the one stored with the credential.
+    user: user?.user ?? (cred?.credential_id ? ctx.credentialUsers.get(cred.credential_id) : undefined) ?? null,
     shell: shell?.shell ?? (node.os === "windows" ? "powershell" : "bash"),
     credentialId: cred?.credential_id ?? null,
     credentialFrom: cred?.id ?? null,
@@ -307,16 +313,29 @@ export function setNodeSkills(db: Database, id: string, skillIds: string[]): Inv
   return requireNode(db, id);
 }
 
-export function deleteNode(db: Database, id: string): void {
-  db.transaction(() => {
-    if (db.query<{ one: number }, [string]>("SELECT 1 AS one FROM nodes WHERE parent_id = ? LIMIT 1").get(id) !== null) {
-      throw new Error("HAS_CHILDREN");
-    }
-    if (db.query<{ one: number }, [string]>("SELECT 1 AS one FROM nodes WHERE jump_node_id = ? LIMIT 1").get(id) !== null) {
-      throw new Error("IS_JUMP_HOST");
-    }
-    db.run("DELETE FROM node_skills WHERE node_id = ?", [id]);
-    db.run("DELETE FROM nodes WHERE id = ?", [id]);
+// Deletes the node (with `recursive`, its whole subtree) and the tasks on it. Returns the deleted
+// node ids and the opencode sessions of the deleted tasks, which the caller drops.
+export function deleteNode(db: Database, id: string, options: { recursive?: boolean } = {}): { nodeIds: string[]; sessions: string[] } {
+  return db.transaction(() => {
+    const ids = subtreeRows(loadCtx(db), id).map((row) => row.id);
+    if (ids.length === 0) throw new Error("NOT_FOUND");
+    if (ids.length > 1 && !options.recursive) throw new Error("HAS_CHILDREN");
+    const list = ids.map(() => "?").join(",");
+    const outside = db
+      .query<{ one: number }, string[]>(`SELECT 1 AS one FROM nodes WHERE jump_node_id IN (${list}) AND id NOT IN (${list}) LIMIT 1`)
+      .get(...ids, ...ids);
+    if (outside !== null) throw new Error("IS_JUMP_HOST");
+    const live = db
+      .query<{ one: number }, string[]>(`SELECT 1 AS one FROM tasks WHERE node_id IN (${list}) AND status IN ('running', 'waiting_permission') LIMIT 1`)
+      .get(...ids);
+    if (live !== null) throw new Error("TASK_RUNNING");
+    const sessions = db.query<{ session_id: string }, string[]>(`SELECT session_id FROM tasks WHERE node_id IN (${list})`).all(...ids);
+    // Parent and jump links inside the subtree are RESTRICT: check them at commit, when all rows are gone.
+    db.run("PRAGMA defer_foreign_keys = ON");
+    db.run(`DELETE FROM tasks WHERE node_id IN (${list})`, ids);
+    db.run(`DELETE FROM node_skills WHERE node_id IN (${list})`, ids);
+    db.run(`DELETE FROM nodes WHERE id IN (${list})`, ids);
+    return { nodeIds: ids, sessions: sessions.map((s) => s.session_id) };
   })();
 }
 

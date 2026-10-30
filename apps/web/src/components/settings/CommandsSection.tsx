@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Loader2, Plus, RotateCcw } from "lucide-react";
+import { Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 import type { ChatCommand } from "@sysadm/shared";
 import { api, type AgentInfo } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -115,7 +115,7 @@ export default function CommandsSection() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-1 flex-col gap-4">
       <div className="flex items-start justify-between gap-4">
         <p className="text-sm text-muted-foreground">{t("commands.intro")}</p>
         <div className="flex shrink-0 gap-2">
@@ -128,9 +128,10 @@ export default function CommandsSection() {
         </div>
       </div>
 
-      <div className="grid grid-cols-[1fr_1.5fr] gap-4">
+      {/* Fills the settings window; the list scrolls inside, the text area takes the rest of the height. */}
+      <div className="grid min-h-96 flex-1 grid-cols-[1fr_1.5fr] grid-rows-[minmax(0,1fr)] gap-4">
         {/* Left: list */}
-        <div className="h-[min(400px,60vh)] overflow-y-auto rounded-lg border">
+        <div className="overflow-y-auto rounded-lg border">
           {loading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
@@ -142,7 +143,11 @@ export default function CommandsSection() {
           ) : (
             <ul className="divide-y divide-border">
               {list.map((c, i) => (
-                <li key={c.name} className="space-y-1 px-3 py-2">
+                <li
+                  key={c.name}
+                  className={cn("cursor-pointer space-y-1 px-3 py-2 transition-colors hover:bg-accent/50", editIndex === i && "bg-accent")}
+                  onClick={() => openEdit(i)}
+                >
                   <div className="flex items-center gap-2">
                     <span className="truncate font-mono text-sm">/{c.name}</span>
                     {c.agent && (
@@ -152,20 +157,6 @@ export default function CommandsSection() {
                     )}
                   </div>
                   <p className="truncate text-xs text-muted-foreground">{c.description || "—"}</p>
-                  <div className="flex gap-2">
-                    <Button size="sm" variant="ghost" onClick={() => openEdit(i)} disabled={saving}>
-                      {t("common.edit")}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-destructive"
-                      onClick={() => remove(i)}
-                      disabled={saving}
-                    >
-                      {t("common.delete")}
-                    </Button>
-                  </div>
                 </li>
               ))}
             </ul>
@@ -173,11 +164,11 @@ export default function CommandsSection() {
         </div>
 
         {/* Right: editor */}
-        <div className="space-y-3 rounded-lg border p-4">
+        <div className="flex flex-col overflow-y-auto rounded-lg border p-4">
           {editIndex === null ? (
             <p className="py-12 text-center text-muted-foreground">{t("commands.pickHint")}</p>
           ) : (
-            <form onSubmit={save} className="space-y-3">
+            <form onSubmit={save} className="flex flex-1 flex-col gap-3">
               <label className="block space-y-1">
                 <span className="text-xs text-muted-foreground">{t("common.name")}</span>
                 <div className="flex items-center gap-1">
@@ -216,11 +207,10 @@ export default function CommandsSection() {
                   ))}
                 </select>
               </label>
-              <label className="block space-y-1">
+              <label className="flex flex-1 flex-col gap-1">
                 <span className="text-xs text-muted-foreground">{t("commands.text")}</span>
                 <textarea
-                  className={cn(fieldClass, "font-mono text-xs")}
-                  rows={10}
+                  className={cn(fieldClass, "min-h-40 flex-1 resize-none font-mono text-xs")}
                   value={form.template}
                   onChange={(e) => setForm({ ...form, template: e.target.value })}
                 />
@@ -230,9 +220,11 @@ export default function CommandsSection() {
                   {saving && <Loader2 className="size-4 animate-spin" />}
                   {t("common.save")}
                 </Button>
-                <Button type="button" variant="ghost" onClick={closeEditor} disabled={saving}>
-                  {t("common.cancel")}
-                </Button>
+                {typeof editIndex === "number" && (
+                  <Button type="button" variant="destructive" className="ml-auto" onClick={() => remove(editIndex)} disabled={saving}>
+                    <Trash2 className="size-4" /> {t("common.delete")}
+                  </Button>
+                )}
               </div>
             </form>
           )}

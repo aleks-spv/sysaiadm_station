@@ -1,7 +1,9 @@
+import { join } from "node:path";
 import { Hono } from "hono";
 import type { ExecOutputView, FilteredOutput, PluginContext, ServerPlugin } from "../../../apps/server/src/plugins/types";
 import type { RtkDay, RtkMethod, RtkRun, RtkStats, RtkTotals } from "../web/types";
 import { compact, pickRtkFilter } from "./compact";
+import { createRtkInstaller, findBinary, type Binary } from "./install";
 
 // Below this the model reads the output as is: nothing worth saving, and no note to pay for.
 const MIN_BYTES = 1024;
@@ -32,20 +34,7 @@ const MIGRATIONS = [
 
 export type RunRtk = (filter: string, input: string) => Promise<string | null>;
 
-interface Binary {
-  path: string;
-  version: string;
-}
-
 const size = (s: string) => Buffer.byteLength(s);
-
-export function findBinary(): Binary | null {
-  const path = Bun.which(process.env.RTK_BIN || "rtk");
-  if (!path) return null;
-  const res = Bun.spawnSync([path, "--version"], { stdout: "pipe", stderr: "ignore", timeout: RTK_TIMEOUT_MS });
-  const version = res.stdout.toString().trim().replace(/^rtk\s+/, "");
-  return res.exitCode === 0 ? { path, version } : null;
-}
 
 function spawnRtk(path: string): RunRtk {
   return async (filter, input) => {
@@ -64,6 +53,11 @@ function spawnRtk(path: string): RunRtk {
 
 export function createRtk(binary: Binary | null, runRtk: RunRtk | null, now: () => number = Date.now) {
   let ready = false;
+  // rtk is spawned per command, so switching to a freshly installed binary needs no restart.
+  const use = (next: Binary | null) => {
+    binary = next;
+    runRtk = next ? spawnRtk(next.path) : null;
+  };
   const ensure = (ctx: PluginContext) => {
     if (!ready) ctx.migrate(MIGRATIONS);
     ready = true;
@@ -147,16 +141,42 @@ export function createRtk(binary: Binary | null, runRtk: RunRtk | null, now: () 
     return app;
   };
 
-  return { filterOutput, routes, stats };
+  return { filterOutput, routes, stats, use, binary: () => binary };
 }
 
-const binary = findBinary();
-const rtk = createRtk(binary, binary ? spawnRtk(binary.path) : null);
+const rtk = createRtk(null, null);
+
+// Version routes: GET /version[?refresh=1] → RtkVersion, POST /upgrade → RtkVersion (installs the latest release).
+function routes(ctx: PluginContext) {
+  const app = rtk.routes(ctx);
+  const managed = join(ctx.dataDir, "bin", "rtk");
+  rtk.use(findBinary(managed));
+  const installer = createRtkInstaller({
+    dir: join(ctx.dataDir, "bin"),
+    external: Boolean(process.env.RTK_BIN),
+    current: rtk.binary,
+    onInstalled: (path) => rtk.use(findBinary(path)),
+  });
+  app.get("/version", async (c) => c.json(await installer.info(c.req.query("refresh") === "1")));
+  app.post("/upgrade", async (c) => {
+    try {
+      const info = await installer.upgrade();
+      ctx.audit(c.get("actor"), "rtk_upgrade", { version: info.current });
+      ctx.log("info", `rtk upgraded to ${info.current}`);
+      return c.json(info);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      ctx.log("error", `rtk upgrade failed: ${message}`);
+      return c.json({ error: message }, 502);
+    }
+  });
+  return app;
+}
 
 export const rtkPlugin: ServerPlugin = {
   id: "rtk",
   name: "Экономия токенов (RTK)",
   description: "Сжимает вывод команд перед моделью: фильтры rtk (find, grep, git diff) и встроенное сжатие повторов, прогресс-баров и длинного вывода.",
-  routes: rtk.routes,
+  routes,
   filterOutput: rtk.filterOutput,
 };

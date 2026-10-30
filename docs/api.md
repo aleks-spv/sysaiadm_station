@@ -33,7 +33,7 @@
 | GET | `/api/nodes/:id` | read |
 | POST | `/api/nodes` | admin |
 | PATCH | `/api/nodes/:id` | admin |
-| DELETE | `/api/nodes/:id` | admin |
+| DELETE | `/api/nodes/:id` (`?recursive=1` — with the subtree and its tasks) | admin |
 | POST | `/api/nodes/:id/move` | admin |
 | POST | `/api/nodes/:id/reset-hostkey` | admin |
 | PUT | `/api/nodes/:id/skills` | admin |
@@ -41,6 +41,7 @@
 | POST | `/api/skills` | admin |
 | PUT | `/api/skills/:id` | admin |
 | DELETE | `/api/skills/:id` | admin |
+| POST | `/api/skills/:id/reset` | admin |
 | GET | `/api/tasks` | read |
 | GET | `/api/tasks/:id` | read |
 | GET | `/api/tasks/:id/permissions` | read |
@@ -64,6 +65,12 @@
 | POST | `/api/system/opencode/restart` | admin |
 | GET | `/api/system/opencode/version` | read |
 | POST | `/api/system/opencode/upgrade` | admin |
+| GET | `/api/tasks/:id/forms` | read |
+| POST | `/api/tasks/:id/forms/:formID/reply` | approve |
+| POST | `/api/tasks/:id/forms/:formID/cancel` | approve |
+| GET | `/api/settings/websearch` | read |
+| PUT | `/api/settings/websearch` | admin |
+| POST | `/api/settings/websearch/test` | admin |
 | POST | `/api/inventory/export` | admin |
 | POST | `/api/inventory/import` | admin |
 | GET | `/api/backups` | admin |
@@ -71,6 +78,8 @@
 | POST | `/api/backups` | admin |
 | GET | `/api/backups/:name` | admin |
 | DELETE | `/api/backups/:name` | admin |
+
+Вопросы агента (инструмент question, в opencode V2 это «формы»): `GET .../forms` отдаёт ожидающие, ответ — `{answer: {ключ поля: строка | число | boolean | список строк}}`. Пока вопрос ждёт, задача в статусе `waiting_permission`.
 
 Экспорт: `POST /api/inventory/export` с `{rootId: string|null, withSecrets: boolean, passphrase: string}` (пароль не короче 12 символов) отдаёт файл `.sysaiadm`: JSON-конверт, тело зашифровано AES-256-GCM ключом из scrypt(пароль). Импорт: multipart `file`, `passphrase`, `parentId?`. Обновление opencode (`POST .../upgrade`) идёт в фоне и отвечает 202; состояние смотреть через `GET .../version` (`busy`).
 

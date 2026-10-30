@@ -5,7 +5,8 @@ import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { errorText } from "@/lib/utils";
 import { fmtDateTime, fmtNumber } from "@/i18n";
-import type { RtkStats, RtkTotals } from "./types";
+import type { RtkStats, RtkTotals, RtkVersion } from "./types";
+import { RTK_CHECKED } from "./RtkUpdate";
 import { t } from "./i18n";
 
 const RELOAD_MS = 30_000;
@@ -71,6 +72,22 @@ export default function RtkPage() {
     }
   };
 
+  const [checking, setChecking] = useState(false);
+  const [checkNote, setCheckNote] = useState<string | null>(null);
+  // A found release shows up as the corner update card.
+  const check = async () => {
+    setChecking(true);
+    try {
+      const v = await api.plugin<RtkVersion>("rtk", "GET", "/version?refresh=1");
+      setCheckNote(v.mode === "external" ? t("update.external") : (v.error ?? (v.updateAvailable ? t("update.available", { latest: v.latest ?? "" }) : t("update.upToDate"))));
+      window.dispatchEvent(new Event(RTK_CHECKED));
+    } catch (err: unknown) {
+      setCheckNote(errorText(err));
+    } finally {
+      setChecking(false);
+    }
+  };
+
   const maxDay = Math.max(1, ...(stats?.daily ?? []).map(saved));
 
   return (
@@ -107,11 +124,14 @@ export default function RtkPage() {
         {stats && (
           <>
             {/* Binary status */}
-            <p className="text-xs text-muted-foreground">
-              {stats.binary
-                ? `rtk ${stats.binary.version} · ${stats.binary.path}`
-                : t("binary.missing")}
-            </p>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>{stats.binary ? `rtk ${stats.binary.version} · ${stats.binary.path}` : t("binary.missing")}</span>
+              <Button size="xs" variant="outline" disabled={checking} onClick={() => void check()}>
+                {checking ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
+                {t("update.check")}
+              </Button>
+              {checkNote && <span>{checkNote}</span>}
+            </div>
 
             {/* Cards */}
             <div className="grid gap-3 sm:grid-cols-2">

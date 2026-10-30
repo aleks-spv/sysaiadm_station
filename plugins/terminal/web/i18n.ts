@@ -12,6 +12,9 @@ export const t = defineMessages({
     reconnect: "Переподключить",
     disconnect: "Отключить",
     connect: "Подключиться",
+    copy: "Копировать выделенное (Ctrl+C при выделении, Ctrl+Shift+C)",
+    paste: "Вставить (Ctrl+V, Ctrl+Shift+V)",
+    clipboardDenied: "Браузер не дал доступ к буферу обмена: нужен HTTPS или разрешение. Ctrl+V работает и без него.",
   },
   en: {
     "status.idle": "not connected",
@@ -24,5 +27,8 @@ export const t = defineMessages({
     reconnect: "Reconnect",
     disconnect: "Disconnect",
     connect: "Connect",
+    copy: "Copy selection (Ctrl+C with a selection, Ctrl+Shift+C)",
+    paste: "Paste (Ctrl+V, Ctrl+Shift+V)",
+    clipboardDenied: "The browser denied clipboard access: HTTPS or a permission is required. Ctrl+V works without it.",
   },
 });

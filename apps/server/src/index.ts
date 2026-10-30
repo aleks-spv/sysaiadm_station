@@ -15,6 +15,7 @@ import { createInternalApp } from "./routes/internal";
 import { inventoryRoutes } from "./routes/inventory";
 import { credentialsRoutes } from "./routes/credentials";
 import { backupRoutes, startBackups } from "./backup";
+import { createWebSearcher, webSearchRoutes } from "./websearch";
 import { exportRoutes } from "./routes/export";
 import { importRoutes } from "./routes/import";
 import { startArchivePurge, startAutopilotExpiry, tasksRoutes } from "./routes/tasks";
@@ -25,7 +26,7 @@ import { makeClient, type OpenCodeClient } from "./opencode";
 import { createOpencodeInstaller, type OpencodeInstaller } from "./opencode-install";
 import { frontmatter } from "./skills-github";
 import { startOpencode, type OpencodeProc } from "./opencode-proc";
-import { buildOpencodeConfig, getOverlay, writeOpencodeConfig, type Overlay } from "./opencode-config";
+import { buildOpencodeConfig, getOverlay, writeDcpConfig, writeOpencodeConfig, type Overlay } from "./opencode-config";
 import { opencodeSettingsRoutes } from "./routes/opencode-settings";
 import { createPluginHost } from "./plugins/host";
 import { PLUGINS } from "./plugins";
@@ -147,7 +148,8 @@ export function syncBuiltinSkills(db: Database, skillsDir: string): number {
 }
 
 const SECURITY_HEADERS: Record<string, string> = {
-  "Content-Security-Policy": "default-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'",
+  // xterm.js injects <style> elements for ANSI colors and the selection; scripts stay 'self' only.
+  "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
 };
@@ -174,6 +176,7 @@ export async function buildApp(config: Config, options: { background: boolean; r
   applyOverlay(getOverlay(db));
   await materializeAll(db, config.infraDir);
   const taskDeps = { db, client, infraDir: config.infraDir };
+  const webSearch = createWebSearcher({ db, client, directory: config.infraDir });
 
   const stops: Array<() => void | Promise<void>> = [];
   const plugins = createPluginHost({ db, masterKey: config.masterKey, dataDir: config.dataDir, log: runtime.log, plugins: PLUGINS, background: options.background, taskDeps });
@@ -228,11 +231,12 @@ export async function buildApp(config: Config, options: { background: boolean; r
     if (c.req.path.startsWith("/api/auth/") || c.req.path === "/api/health") return next();
     return guard(c, next);
   });
-  app.route("/", inventoryRoutes({ ...taskDeps, bus, githubToken: config.githubToken }));
+  app.route("/", inventoryRoutes({ ...taskDeps, bus, githubToken: config.githubToken, skillsDir: config.skillsDir }));
   app.route("/", credentialsRoutes(db, config.masterKey));
   app.route("/", commandsRoutes(db));
   app.route("/", factsRoutes({ db, masterKey: config.masterKey, infraDir: config.infraDir, bus }));
   app.route("/", importRoutes({ db, infraDir: config.infraDir }));
+  app.route("/", webSearchRoutes(db, webSearch));
   app.route("/", backupRoutes(db, join(config.dataDir, "backups")));
   app.route("/", exportRoutes({ db, masterKey: config.masterKey, infraDir: config.infraDir }));
   app.route("/", tasksRoutes(taskDeps));
@@ -244,7 +248,7 @@ export async function buildApp(config: Config, options: { background: boolean; r
 
   app.get("*", serveStatic({ root: config.webDist }), serveStatic({ root: config.webDist, path: "index.html" }));
 
-  const internalApp = createInternalApp({ db, token: runtime.internalToken, masterKey: config.masterKey, filterOutput: plugins.filterOutput });
+  const internalApp = createInternalApp({ db, token: runtime.internalToken, masterKey: config.masterKey, filterOutput: plugins.filterOutput, maskOutput: plugins.maskOutput, webSearch });
 
   return {
     publicApp: app,
@@ -282,6 +286,7 @@ if (import.meta.main) {
   const built = await buildApp(config, { background: true, runtime: { internalToken, opencodePassword, log, proc: procRef, installer } });
   // First start on an empty volume downloads opencode; on failure the child backs off until the admin installs it.
   await installer.ensure();
+  writeDcpConfig(config.opencodeHome);
   proc = startOpencode({
     bin: installer.bin,
     port: config.opencodePort,

@@ -278,13 +278,11 @@ export default function Composer(props: Props) {
         <AgentPicker agents={props.agents} value={props.agent} onChange={props.onAgent} locked={props.locked} />
         <ModelPicker models={props.models} value={props.model} onChange={props.onModel} locked={props.locked} />
         {props.onAutopilot && <AutopilotToggle until={props.autopilotUntil ?? null} onChange={props.onAutopilot} />}
-        <span className="ml-auto hidden text-[11px] text-muted-foreground sm:block">
-          {sendKey === "enter" ? t("composer.enterHint") : t("composer.modEnterHint")}
-          {props.commands?.length ? t("composer.commandsHint") : ""}
-        </span>
+        <span className="ml-auto" />
         {props.running && (
-          <Button size="icon-sm" variant="outline" onClick={props.onStop} aria-label={t("composer.stop")} title={t("composer.stop")}>
+          <Button size="sm" variant="destructive" onClick={props.onStop} title={t("composer.stopHint")}>
             <Square className="fill-current" />
+            {t("composer.stop")}
           </Button>
         )}
         <Button size="icon-sm" className={cn("rounded-full")} disabled={!text.trim() || busy} onClick={send} aria-label={t("composer.send")}>

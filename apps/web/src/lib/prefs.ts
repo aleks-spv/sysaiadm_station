@@ -36,6 +36,11 @@ const MONO_FALLBACK = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
 export const UI_FONTS: FontOption[] = [
   { id: "geist", label: "Geist", stack: "'Geist Variable', sans-serif" },
   { id: "inter", label: "Inter", stack: "'Inter Variable', sans-serif" },
+  { id: "onest", label: "Onest", stack: "'Onest Variable', sans-serif" },
+  { id: "manrope", label: "Manrope", stack: "'Manrope Variable', sans-serif" },
+  { id: "golos", label: "Golos Text", stack: "'Golos Text Variable', sans-serif" },
+  { id: "ibm-plex-sans", label: "IBM Plex Sans", stack: "'IBM Plex Sans', sans-serif" },
+  { id: "rubik", label: "Rubik", stack: "'Rubik Variable', sans-serif" },
   { id: "system", label: t("font.system"), stack: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" },
   { id: "mono", label: t("font.mono"), stack: `'JetBrains Mono Variable', ${MONO_FALLBACK}` },
 ];
@@ -43,6 +48,13 @@ export const UI_FONTS: FontOption[] = [
 export const MONO_FONTS: FontOption[] = [
   { id: "geist-mono", label: "Geist Mono", stack: `'Geist Mono Variable', ${MONO_FALLBACK}` },
   { id: "jetbrains", label: "JetBrains Mono", stack: `'JetBrains Mono Variable', ${MONO_FALLBACK}` },
+  { id: "fira-code", label: "Fira Code", stack: `'Fira Code Variable', ${MONO_FALLBACK}` },
+  { id: "cascadia", label: "Cascadia Code", stack: `'Cascadia Code Variable', ${MONO_FALLBACK}` },
+  { id: "ibm-plex-mono", label: "IBM Plex Mono", stack: `'IBM Plex Mono', ${MONO_FALLBACK}` },
+  { id: "source-code-pro", label: "Source Code Pro", stack: `'Source Code Pro Variable', ${MONO_FALLBACK}` },
+  { id: "roboto-mono", label: "Roboto Mono", stack: `'Roboto Mono Variable', ${MONO_FALLBACK}` },
+  { id: "ubuntu-mono", label: "Ubuntu Mono", stack: `'Ubuntu Mono', ${MONO_FALLBACK}` },
+  { id: "martian-mono", label: "Martian Mono", stack: `'Martian Mono Variable', ${MONO_FALLBACK}` },
   { id: "system", label: t("font.system"), stack: MONO_FALLBACK },
 ];
 
@@ -56,12 +68,19 @@ export interface Prefs {
   codeSize: number;
   terminalFont: string;
   terminalSize: number;
+  // Line height as a multiple of the font size; xterm's own default (1.0) packs lines tight.
+  terminalLineHeight: number;
+  // Color scheme id from lib/terminalThemes; "app" follows the UI theme.
+  terminalTheme: string;
+  // On connect to Linux: colored prompt and ls/grep for the session when the server has none.
+  terminalColorize: boolean;
   // Corner radius in rem.
   radius: number;
   chatWidth: "narrow" | "wide" | "full";
-  // Reasoning and command output start expanded in finished answers.
-  expandReasoning: boolean;
+  // Command output starts expanded in the chat.
   expandOutput: boolean;
+  // Thousands of tokens of task context after which the chat suggests a new task; 0 turns it off.
+  contextWarn: number;
   sendKey: "enter" | "mod-enter";
   // Browser notification when a task finishes or waits for approval while the tab is in the background.
   notify: boolean;
@@ -76,10 +95,13 @@ export const DEFAULT_PREFS: Prefs = {
   codeSize: 12,
   terminalFont: "geist-mono",
   terminalSize: 13,
+  terminalLineHeight: 1.25,
+  terminalTheme: "one-dark",
+  terminalColorize: true,
   radius: 0.625,
   chatWidth: "wide",
-  expandReasoning: false,
   expandOutput: false,
+  contextWarn: 180,
   sendKey: "enter",
   notify: false,
   reduceMotion: false,
@@ -89,6 +111,7 @@ export const LIMITS = {
   uiSize: [12, 18],
   codeSize: [10, 16],
   terminalSize: [10, 20],
+  terminalLineHeight: [1, 1.8],
   radius: [0, 1.25],
 } as const;
 

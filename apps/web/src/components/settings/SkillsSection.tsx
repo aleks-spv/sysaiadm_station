@@ -4,6 +4,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Trash2,
 } from "lucide-react";
@@ -41,6 +42,7 @@ function parseSource(source: string | null | undefined): ParsedSource | null {
 
 function getBadge(s: Skill) {
   if (s.builtin) return { label: t("skills.badgeBuiltin"), cls: "bg-slate-500/15 text-slate-400" };
+  if (s.shipped) return { label: t("skills.badgeEdited"), cls: "bg-amber-500/15 text-amber-500" };
   if (s.source?.startsWith("github:")) {
     const p = parseSource(s.source);
     return { label: `GitHub (${p ? `${p.owner}/${p.repo}` : s.source})`, cls: "bg-blue-500/15 text-blue-400" };
@@ -69,6 +71,9 @@ export default function SkillsSection() {
   const [form, setForm] = useState({ id: "", name: "", description: "", content: "" });
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  // The right pane shows the GitHub installer instead of the editor.
+  const [githubOpen, setGithubOpen] = useState(false);
 
   // GitHub install state
   const [githubInput, setGithubInput] = useState("");
@@ -110,26 +115,46 @@ export default function SkillsSection() {
   const resetForm = () => {
     setForm({ id: "", name: "", description: "", content: "" });
     setSelectedId(null);
+    setCreating(false);
+    setGithubOpen(false);
     setMessage(null);
+  };
+
+  const startNew = () => {
+    resetForm();
+    setCreating(true);
   };
 
   const selectSkill = (s: Skill) => {
     setSelectedId(s.id);
+    setCreating(false);
+    setGithubOpen(false);
+    setMessage(null);
     setForm({ id: s.id, name: s.name, description: s.description, content: s.content });
+  };
+
+  const resetToOriginal = async (id: string) => {
+    if (!window.confirm(t("skills.confirmReset", { id }))) return;
+    try {
+      await api.resetSkill(id);
+      resetForm();
+      setMessage(t("skills.restored"));
+      load();
+    } catch (err) {
+      setMessage(errorText(err));
+    }
   };
 
   const saveSkill = async (e: FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
-      if (selectedId) {
-        await api.updateSkill(selectedId, { name: form.name, description: form.description, content: form.content });
-        setMessage(t("skills.saved"));
-      } else {
-        await api.createSkill(form);
-        setMessage(t("skills.added"));
-      }
-      resetForm();
+      if (selectedId) await api.updateSkill(selectedId, { name: form.name, description: form.description, content: form.content });
+      else await api.createSkill(form);
+      // Stay on the saved skill, so the admin sees the result instead of an empty panel.
+      setCreating(false);
+      setSelectedId(selectedId ?? form.id);
+      setMessage(selectedId ? t("skills.saved") : t("skills.added"));
       load();
     } catch (err) {
       setMessage(errorText(err));
@@ -216,96 +241,34 @@ export default function SkillsSection() {
   const hintCls = "text-xs text-muted-foreground";
 
   return (
-    <div className="space-y-6">
-      {/* GitHub install block */}
-      <section className="space-y-3 rounded-xl border p-4">
-        <div className="flex items-center gap-2">
-          <GitBranch className="size-4 text-muted-foreground" />
-          <h3 className="font-medium">{t("skills.installFromGithub")}</h3>
-        </div>
-        <form onSubmit={scanGithub} className="space-y-2">
-          <Input
-            placeholder={t("skills.repoPlaceholder")}
-            value={githubInput}
-            onChange={(e) => setGithubInput(e.target.value)}
-          />
-          <Input
-            placeholder={t("skills.refPlaceholder")}
-            value={githubRef}
-            onChange={(e) => setGithubRef(e.target.value)}
-          />
-          <div className="flex gap-2">
-            <Button type="submit" disabled={scanning || !githubInput.trim()}>
-              {scanning ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-              {t("skills.scan")}
-            </Button>
-          </div>
-        </form>
-        <p className={hintCls}>{t("skills.githubHint")}</p>
-        {scanResult && (
-          <div className="space-y-2">
-            <p className="text-sm text-muted-foreground">
-              {t("skills.found", { count: scanResult.skills.length, owner: scanResult.owner, repo: scanResult.repo, ref: scanResult.ref })}
-            </p>
-            <ul className="space-y-1">
-              {scanResult.skills.map((s) => {
-                const existing = existsMap.get(s.id);
-                const source = existing?.source;
-                const isGithub = source?.startsWith("github:");
-                let label: string;
-                if (s.exists) label = isGithub ? t("skills.statusUpdate") : t("skills.statusExists");
-                else label = t("skills.statusInstall");
-                return (
-                  <li key={s.path} className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={selectedPaths.has(s.path)}
-                      onChange={() => togglePath(s.path)}
-                      disabled={s.exists && !isGithub}
-                    />
-                    <span className="min-w-0 flex-1 truncate font-mono text-xs">{s.path}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground">{s.name || s.id}</span>
-                    {s.exists && (
-                      <span
-                        className={cn(
-                          "shrink-0 rounded-full px-2 py-0.5 text-[10px]",
-                          label === t("skills.statusUpdate") ? "bg-amber-500/15 text-amber-400" : "bg-muted text-muted-foreground",
-                        )}
-                      >
-                        {label}
-                      </span>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-            <div className="flex items-center gap-2">
-              <Button onClick={installSelected} disabled={installing || selectedPaths.size === 0}>
-                {installing ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-                {t("skills.installSelected", { count: selectedPaths.size })}
-              </Button>
-            </div>
-            {installResult && <InstallResult result={installResult} />}
-          </div>
-        )}
-      </section>
+    <div className="flex flex-1 flex-col gap-4">
+      <div className="flex items-center justify-end gap-2">
+        <Button
+          size="sm"
+          variant={githubOpen ? "secondary" : "outline"}
+          onClick={() => {
+            resetForm();
+            setGithubOpen(true);
+          }}
+        >
+          <GitBranch className="size-4" /> {t("skills.installFromGithub")}
+        </Button>
+        <Button size="sm" onClick={startNew}>
+          <Plus className="size-4" /> {t("skills.new")}
+        </Button>
+      </div>
 
       {/* Two-column: list + editor */}
-      <div className="grid grid-cols-[1fr_1.5fr] gap-4">
+      {/* Fills the rest of the settings window; the list and the editor scroll inside. */}
+      <div className="grid min-h-96 flex-1 grid-cols-[1fr_1.5fr] grid-rows-[minmax(0,1fr)] gap-4">
         {/* Left: list */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <h3 className="font-medium">{t("skills.title")}</h3>
-            <Button size="sm" variant="outline" onClick={resetForm}>
-              <Plus className="size-4" /> {t("skills.new")}
-            </Button>
-          </div>
+        <div className="flex min-h-0 flex-col gap-2">
           <Input
             placeholder={t("skills.search")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <div className="h-[min(400px,60vh)] overflow-y-auto rounded-lg border">
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border">
             {loading && list.length === 0 ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="size-5 animate-spin text-muted-foreground" />
@@ -325,18 +288,13 @@ export default function SkillsSection() {
                     )}
                     onClick={() => selectSkill(s)}
                   >
-                    <div className="flex items-start gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate font-medium">{s.name || s.id}</span>
-                          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{s.id}</span>
-                          <span className={cn("shrink-0 rounded-full px-1.5 py-0.5 text-[10px]", getBadge(s).cls)}>
-                            {getBadge(s).label}
-                          </span>
-                        </div>
-                        <p className="truncate text-xs text-muted-foreground">{s.description || "—"}</p>
-                      </div>
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium" title={s.id}>{s.name || s.id}</span>
+                      <span className={cn("ml-auto max-w-[45%] shrink-0 truncate rounded-full px-1.5 py-0.5 text-[10px]", getBadge(s).cls)}>
+                        {getBadge(s).label}
+                      </span>
                     </div>
+                    <p className="line-clamp-2 text-xs text-muted-foreground">{s.description || "—"}</p>
                   </li>
                 ))}
               </ul>
@@ -345,14 +303,101 @@ export default function SkillsSection() {
         </div>
 
         {/* Right: editor */}
-        <div className="space-y-3 rounded-lg border p-4">
-          {!selected && !selectedId ? (
-            <p className="py-12 text-center text-muted-foreground">{t("skills.pickHint")}</p>
+        <div className="flex flex-col overflow-y-auto rounded-lg border p-4">
+          {githubOpen ? (
+            <section className="space-y-3">
+              <div className="flex items-center gap-2">
+                <GitBranch className="size-4 text-muted-foreground" />
+                <h3 className="font-medium">{t("skills.installFromGithub")}</h3>
+              </div>
+              <form onSubmit={scanGithub} className="space-y-2">
+                <Input
+                  placeholder={t("skills.repoPlaceholder")}
+                  value={githubInput}
+                  onChange={(e) => setGithubInput(e.target.value)}
+                />
+                <Input
+                  placeholder={t("skills.refPlaceholder")}
+                  value={githubRef}
+                  onChange={(e) => setGithubRef(e.target.value)}
+                />
+                <div className="flex gap-2">
+                  <Button type="submit" disabled={scanning || !githubInput.trim()}>
+                    {scanning ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+                    {t("skills.scan")}
+                  </Button>
+                </div>
+              </form>
+              <p className={hintCls}>{t("skills.githubHint")}</p>
+              {scanResult && (
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    {t("skills.found", { count: scanResult.skills.length, owner: scanResult.owner, repo: scanResult.repo, ref: scanResult.ref })}
+                  </p>
+                  <ul className="space-y-1">
+                    {scanResult.skills.map((s) => {
+                      const existing = existsMap.get(s.id);
+                      const source = existing?.source;
+                      const isGithub = source?.startsWith("github:");
+                      let label: string;
+                      if (s.exists) label = isGithub ? t("skills.statusUpdate") : t("skills.statusExists");
+                      else label = t("skills.statusInstall");
+                      return (
+                        <li key={s.path} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedPaths.has(s.path)}
+                            onChange={() => togglePath(s.path)}
+                            disabled={s.exists && !isGithub}
+                          />
+                          <span className="min-w-0 flex-1 truncate font-mono text-xs">{s.path}</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">{s.name || s.id}</span>
+                          {s.exists && (
+                            <span
+                              className={cn(
+                                "shrink-0 rounded-full px-2 py-0.5 text-[10px]",
+                                label === t("skills.statusUpdate") ? "bg-amber-500/15 text-amber-400" : "bg-muted text-muted-foreground",
+                              )}
+                            >
+                              {label}
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <div className="flex items-center gap-2">
+                    <Button onClick={installSelected} disabled={installing || selectedPaths.size === 0}>
+                      {installing ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+                      {t("skills.installSelected", { count: selectedPaths.size })}
+                    </Button>
+                  </div>
+                  {installResult && <InstallResult result={installResult} />}
+                </div>
+              )}
+              {message && <p className="text-sm text-destructive">{message}</p>}
+            </section>
+          ) : !selected && !creating ? (
+            <div className="space-y-2 py-12 text-center">
+              <p className="text-muted-foreground">{t("skills.pickHint")}</p>
+              {message && <p className="text-sm">{message}</p>}
+            </div>
           ) : (
-            <form onSubmit={saveSkill} className="space-y-3">
-              <label className="space-y-1">
+            <form onSubmit={saveSkill} className="flex flex-1 flex-col gap-3">
+              {selected?.shipped && (
+                <p className="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                  {selected.builtin ? t("skills.builtinHint") : t("skills.editedHint")}
+                </p>
+              )}
+              <label className="block space-y-1">
                 <span className="text-xs text-muted-foreground">id</span>
-                <Input value={form.id} disabled={!!selectedId} />
+                <Input
+                  value={form.id}
+                  disabled={!!selectedId}
+                  required
+                  pattern="[a-z0-9][a-z0-9\-]{0,63}"
+                  onChange={(e) => setForm({ ...form, id: e.target.value.toLowerCase() })}
+                />
               </label>
               <label className="space-y-1">
                 <span className="text-xs text-muted-foreground">{t("common.displayName")}</span>
@@ -362,11 +407,10 @@ export default function SkillsSection() {
                 <span className="text-xs text-muted-foreground">{t("common.description")}</span>
                 <Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
               </label>
-              <label className="space-y-1">
+              <label className="flex flex-1 flex-col gap-1">
                 <span className="text-xs text-muted-foreground">{t("skills.content")}</span>
                 <Textarea
-                  className="font-mono text-sm"
-                  rows={16}
+                  className="min-h-60 flex-1 resize-none font-mono text-sm field-sizing-fixed"
                   value={form.content}
                   onChange={(e) => setForm({ ...form, content: e.target.value })}
                 />
@@ -384,15 +428,18 @@ export default function SkillsSection() {
                         {t("skills.refreshGithub")}
                       </Button>
                     )}
-                    {!selected.builtin && (
-                      <Button type="button" variant="destructive" onClick={() => deleteSkill(selected.id)}>
+                    {selected.shipped && !selected.builtin && (
+                      <Button type="button" variant="outline" onClick={() => resetToOriginal(selected.id)}>
+                        <RotateCcw className="size-4" />
+                        {t("skills.restore")}
+                      </Button>
+                    )}
+                    {!selected.shipped && (
+                      <Button type="button" variant="destructive" className="ml-auto" onClick={() => deleteSkill(selected.id)}>
                         <Trash2 className="size-4" />
                         {t("common.delete")}
                       </Button>
                     )}
-                    <Button type="button" variant="ghost" onClick={resetForm}>
-                      {t("common.cancel")}
-                    </Button>
                   </>
                 )}
               </div>

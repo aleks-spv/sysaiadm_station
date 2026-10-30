@@ -48,13 +48,16 @@ test("a proxmox vm gets its os skills and no credential or ssh user", async () =
 
   const agents = await read(host.id, "AGENTS.md");
   expect(agents).toContain("Сервер этой сессии: pve-07, 10.0.0.5, ОС proxmox, оболочка bash.");
-  expect(agents).toContain("Путь в дереве: Acme / pve-07");
+  // The inventory tree is the admin's filing, not something the agent needs.
+  expect(agents).not.toContain("Acme");
   expect(agents).not.toContain("CRED-NAME-SECRET");
   expect(agents).not.toContain("SSH-USER-SECRET");
 
   for (const skill of ["linux-common", "linux-virtualization", "proxmox"]) {
     expect(await read(host.id, `.opencode/skills/${skill}/SKILL.md`)).toContain(`body of ${skill}`);
+    expect(agents).toContain(`- \`${skill}\` — d`);
   }
+  expect(agents).toContain("До первой команды загрузи инструментом `skill`");
 });
 
 test("company notes come before vm notes", async () => {

@@ -293,6 +293,26 @@ Disable-ScheduledTask -TaskName "DailyMaintenance"
 Unregister-ScheduledTask -TaskName "DailyMaintenance" -Confirm:$false
 ```
 
+## Long Operations Over SSH (SysAiAdm Station)
+
+Windows has no tmux. A command started by `remote_exec` dies with the SSH session, and so do `Start-Job` and `Start-Process` children. Run updates, installs, copies and backups as a one-shot scheduled task under SYSTEM: it does not depend on the session.
+
+```powershell
+# Start (no single quotes inside <command>; put complex work into a .ps1 script)
+$a = New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -Command "& { <command> *> C:\Windows\Temp\sysadm_upd.log; \"EXIT=$LASTEXITCODE\" >> C:\Windows\Temp\sysadm_upd.log }"'
+Register-ScheduledTask -TaskName sysadm_upd -Action $a -User SYSTEM -RunLevel Highest -Force
+Start-ScheduledTask -TaskName sysadm_upd
+
+# Watch (read-only, no confirmation needed)
+Get-ScheduledTaskInfo -TaskName sysadm_upd   # LastTaskResult 267009 = still running
+Get-Content C:\Windows\Temp\sysadm_upd.log -Tail 50
+
+# Done when the log has EXIT=; check the code and the real state, then clean up
+Unregister-ScheduledTask -TaskName sysadm_upd -Confirm:$false
+```
+
+Tell the user the task name: it is visible in Task Scheduler and can be stopped there.
+
 ## Troubleshooting
 
 | Symptom | Diagnostic Command | Common Fix |

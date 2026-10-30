@@ -4,9 +4,11 @@ import type { JumpMode, NodeKind, OsKind, ShellKind } from "@sysadm/shared";
 import { getFacts } from "../facts";
 import { audit } from "../guard";
 import { createNode, deleteNode, getNode, getTree, moveNode, resolveEffective, setNodeSkills, updateNode, type NodePatch } from "../inventory";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { materializeSubtree, nodeDir, removeNode } from "../materialize";
-import { parseRepo, scanRepo } from "../skills-github";
+import { materializeAll, materializeSubtree, nodeDir, removeNode } from "../materialize";
+import { removeSession } from "../opencode";
+import { frontmatter, parseRepo, scanRepo } from "../skills-github";
 import { applyAutopilot, AUTOPILOT_MS, type TaskDeps } from "./tasks";
 
 const KINDS: NodeKind[] = ["company", "group", "hypervisor", "vm"];
@@ -20,6 +22,8 @@ export interface InventoryDeps extends TaskDeps {
   bus?: { publish(message: { type: string; [key: string]: unknown }): void };
   fetch?: typeof fetch;
   githubToken?: string;
+  // Shipped built-in skills (<dir>/<id>/SKILL.md): an edited built-in can be reset to its original.
+  skillsDir?: string;
 }
 
 type Body = Record<string, unknown>;
@@ -52,7 +56,7 @@ function optAddress(value: unknown): string | null | undefined {
 function failure(c: Context, err: unknown) {
   const code = err instanceof Error ? err.message : "";
   if (code === "NOT_FOUND") return c.json({ error: code }, 404);
-  if (code === "HAS_CHILDREN" || code === "IS_JUMP_HOST" || code === "MOVE_CYCLE") return c.json({ error: code }, 409);
+  if (code === "HAS_CHILDREN" || code === "IS_JUMP_HOST" || code === "MOVE_CYCLE" || code === "TASK_RUNNING") return c.json({ error: code }, 409);
   if (code.startsWith("JUMP_") || code === "VM_NO_ADDRESS") return c.json({ error: code }, 422);
   if (code.includes("FOREIGN KEY") || code.includes("CHECK constraint")) return c.json({ error: "constraint violated" }, 409);
   throw err;
@@ -67,6 +71,10 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
     await materializeSubtree(db, infraDir, nodeId);
     deps.bus?.publish({ type: "tree.updated", nodeId });
   };
+
+  // Skill text lives in each node's .opencode/skills copy: rewrite them, or the agent keeps the old text.
+  // shortcut: rewrites every node (~300 small files); narrow to nodes using the skill if it ever gets slow.
+  const skillsChanged = () => materializeAll(db, infraDir);
 
   app.get("/api/tree", (c) => c.json(getTree(db)));
 
@@ -186,9 +194,11 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
     const id = c.req.param("id");
     if (!getNode(db, id)) return c.json({ error: "not found" }, 404);
     try {
-      deleteNode(db, id);
-      await removeNode(infraDir, id);
-      audit(db, { actor: c.get("actor"), action: "node_delete", nodeId: id });
+      const { nodeIds, sessions } = deleteNode(db, id, { recursive: c.req.query("recursive") === "1" });
+      for (const session of sessions) removeSession(deps.client, session).catch(() => {});
+      await Promise.all(nodeIds.map((nodeId) => removeNode(infraDir, nodeId)));
+      audit(db, { actor: c.get("actor"), action: "node_delete", nodeId: id, detail: { nodes: nodeIds.length, tasks: sessions.length } });
+      deps.bus?.publish({ type: "tree.updated", nodeId: id });
       return c.json({ ok: true });
     } catch (err) {
       return failure(c, err);
@@ -220,15 +230,35 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
     }
   });
 
+  const shippedFile = (id: string) => (deps.skillsDir && SKILL_ID.test(id) ? join(deps.skillsDir, id, "SKILL.md") : null);
+
   app.get("/api/skills", (c) =>
     c.json(
       db
         .query<{ id: string; name: string; description: string; content: string; builtin: number; source: string | null }, []>(
           "SELECT id, name, description, content, builtin, source FROM skills ORDER BY id",
         )
-        .all(),
+        .all()
+        // shipped: an original exists in the image, so an edited copy can be reset.
+        .map((s) => ({ ...s, shipped: Boolean(s.builtin) || existsSync(shippedFile(s.id) ?? "") })),
     ),
   );
+
+  app.post("/api/skills/:id/reset", async (c) => {
+    const id = c.req.param("id");
+    const file = shippedFile(id);
+    if (!file || !existsSync(file)) return c.json({ error: "у этого скила нет встроенного оригинала" }, 404);
+    const content = readFileSync(file, "utf8");
+    const meta = frontmatter(content);
+    db.run(
+      `INSERT INTO skills (id, name, description, content, builtin) VALUES (?, ?, ?, ?, 1)
+       ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, content = excluded.content, builtin = 1, source = NULL`,
+      [id, meta.name || id, meta.description, content],
+    );
+    await skillsChanged();
+    audit(db, { actor: c.get("actor"), action: "skill_reset", detail: { id } });
+    return c.json({ id });
+  });
 
   const scan = async (c: Context) => {
     const body = await readBody(c);
@@ -289,6 +319,7 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
         skipped.push({ id: skill.id, reason: "уже есть локальный скил с таким id" });
       }
     }
+    if (updated.length) await skillsChanged();
     audit(db, { actor: c.get("actor"), action: "skill_install", detail: { repo: `${r.spec.owner}/${r.spec.repo}`, ref: r.ref, installed, updated } });
     return c.json({ installed, updated, skipped });
   });
@@ -314,6 +345,7 @@ export function inventoryRoutes(deps: InventoryDeps): Hono {
     }
     // An edited builtin becomes the admin's own: syncBuiltinSkills no longer overwrites it; deleting it restores the original on restart.
     db.run("UPDATE skills SET name = ?, description = ?, content = ?, builtin = 0 WHERE id = ?", [body.name, body.description, body.content, id]);
+    await skillsChanged();
     audit(db, { actor: c.get("actor"), action: "skill_update", detail: { id } });
     return c.json({ id });
   });

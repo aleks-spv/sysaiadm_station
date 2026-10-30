@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import type { Credential, InventoryNode, JumpMode, OsKind, ShellKind } from "@sysadm/shared";
-import { api, type NodeDetail, type NodeFields, type Skill } from "@/api";
+import { api, CONFIG_CHANGED, type NodeDetail, type NodeFields, type Skill } from "@/api";
 import { OS_LABEL, OSES } from "@/components/AddNodeDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,12 +36,16 @@ export default function NodeSettings({ detail, nodes, onChanged }: Props) {
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([api.credentials(), api.skills()])
-      .then(([c, s]) => {
-        setCreds(c);
-        setSkills(s);
-      })
-      .catch((err: unknown) => setMessage(errorText(err)));
+    const load = () =>
+      Promise.all([api.credentials(), api.skills()])
+        .then(([c, s]) => {
+          setCreds(c);
+          setSkills(s);
+        })
+        .catch((err: unknown) => setMessage(errorText(err)));
+    void load();
+    window.addEventListener(CONFIG_CHANGED, load);
+    return () => window.removeEventListener(CONFIG_CHANGED, load);
   }, []);
 
   useEffect(() => {

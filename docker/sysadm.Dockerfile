@@ -4,7 +4,8 @@ WORKDIR /src
 COPY . .
 RUN bun install --frozen-lockfile && bun run --filter @sysadm/web build
 
-# rtk (Apache-2.0 edition) for the rtk plugin: pinned release, checksum verified.
+# rtk (Apache-2.0 edition) for the rtk plugin: pinned release, checksum verified. Newer releases are installed
+# from the UI into /data/plugins/rtk/bin and win over this one while they are newer.
 FROM alpine:3.20 AS rtk
 ARG TARGETARCH
 ARG RTK_VERSION=v1.1.0
@@ -42,5 +43,6 @@ ENV SKILLS_DIR=/app/skills WEB_DIST=/app/apps/web/dist OPENCODE_HOME=/data/openc
 RUN mkdir -p /data/opencode /infra && chown -R 1000:1000 /data /infra
 USER 1000:1000
 EXPOSE 8080
-HEALTHCHECK --interval=15s --timeout=3s CMD ["bun", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+# start-period: the first start downloads opencode (~250 MB) into /data/opencode/bin before the port opens.
+HEALTHCHECK --interval=15s --timeout=3s --start-period=300s CMD ["bun", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
 CMD ["bun", "apps/server/src/index.ts"]

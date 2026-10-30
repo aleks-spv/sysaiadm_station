@@ -136,9 +136,29 @@ export function createPluginHost(opts: PluginHostOptions) {
     return notes.length ? { ...current, note: notes.join("\n") } : current;
   };
 
+  // Like filterOutput, but fails closed: a broken mask must not hand secrets to the model.
+  // `shown` is what the model would read so far: the filtered (or raw) output with its note.
+  const maskOutput = async (output: ExecOutputView, shown: FilteredOutput): Promise<FilteredOutput> => {
+    let current = shown;
+    for (const plugin of opts.plugins) {
+      if (!plugin.maskOutput || !enabled(plugin.id)) continue;
+      try {
+        const next = await plugin.maskOutput(contexts.get(plugin.id)!, { ...output, ...current });
+        if (!next) continue;
+        const note = [current.note, next.note].filter(Boolean).join("\n");
+        current = { stdout: next.stdout, stderr: next.stderr, ...(note && { note }) };
+      } catch (err) {
+        opts.log.write("app", "error", `[plugin ${plugin.id}] maskOutput failed: ${err instanceof Error ? err.message : String(err)}`);
+        return { stdout: "", stderr: "", note: `[вывод скрыт: плагин ${plugin.id} не смог проверить его на секреты]` };
+      }
+    }
+    return current;
+  };
+
   return {
     app,
     filterOutput,
+    maskOutput,
     stop: async () => {
       for (const id of [...stops.keys()]) await stopPlugin(id);
     },

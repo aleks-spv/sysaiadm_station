@@ -4,9 +4,27 @@ import { LANGS, lang, setLang, type Lang } from "@/i18n";
 import { t } from "@/i18n/settings";
 import { ACCENTS, LIMITS, MONO_FONTS, UI_FONTS, fontStack, resetPrefs, setPrefs, usePrefs } from "@/lib/prefs";
 import { cn, fieldClass } from "@/lib/utils";
+import { TERMINAL_THEMES, terminalPalette } from "@/lib/terminalThemes";
 import { THEMES, applyTheme, currentTheme } from "@/theme";
 
 // Per-browser preferences: every control applies at once, nothing waits for a Save button.
+// A fake shell session in the chosen colors; the "app" scheme previews with the UI colors.
+function TerminalPreview({ themeId, font, size, lineHeight }: { themeId: string; font: string; size: number; lineHeight: number }) {
+  const p = terminalPalette(themeId);
+  const c = (color: keyof NonNullable<typeof p>, fallback: string) => p?.[color] ?? fallback;
+  return (
+    <pre
+      className="my-2 overflow-x-auto rounded-lg border p-3"
+      style={{ fontFamily: font, fontSize: size, lineHeight, background: c("background", "var(--background)"), color: c("foreground", "var(--foreground)") }}
+    >
+      <span style={{ color: c("green", "var(--primary)") }}>root@pve-07</span>:<span style={{ color: c("blue", "var(--primary)") }}>~</span># systemctl status nginx
+      {"\n"}<span style={{ color: c("green", "inherit") }}>●</span> nginx.service - A high performance web server
+      {"\n"}     Active: <span style={{ color: c("brightGreen", "inherit") }}>active (running)</span> since Thu 09:12:44
+      {"\n"}<span style={{ color: c("yellow", "inherit") }}>warning</span>: 3 workers · <span style={{ color: c("red", "inherit") }}>error</span>: upstream timed out · <span style={{ color: c("magenta", "inherit") }}>/etc/nginx</span> · <span style={{ color: c("cyan", "inherit") }}>10.0.0.5</span>
+    </pre>
+  );
+}
+
 export default function GeneralSection() {
   const prefs = usePrefs();
   const [theme, setTheme] = useState(currentTheme);
@@ -138,6 +156,16 @@ export default function GeneralSection() {
             ))}
           </select>
         </Row>
+        <Row label={t("general.terminalTheme")}>
+          <select className={cn(fieldClass, "w-auto")} value={prefs.terminalTheme} onChange={(e) => setPrefs({ terminalTheme: e.target.value })}>
+            {TERMINAL_THEMES.map((th) => (
+              <option key={th.id} value={th.id}>
+                {th.palette ? th.label : t("general.terminalThemeApp")}
+              </option>
+            ))}
+          </select>
+        </Row>
+        <TerminalPreview themeId={prefs.terminalTheme} font={fontStack(prefs.terminalFont)} size={prefs.terminalSize} lineHeight={prefs.terminalLineHeight} />
         <Row label={t("general.terminalSize")} hint={`${prefs.terminalSize} px`}>
           <input
             type="range"
@@ -149,12 +177,20 @@ export default function GeneralSection() {
             className="w-40 accent-primary"
           />
         </Row>
-        <div className="mt-3 space-y-2 rounded-lg border bg-card p-3">
-          <p style={{ fontFamily: "var(--app-font-sans)" }}>{t("general.previewText")}</p>
-          <pre style={{ fontFamily: fontStack(prefs.monoFont), fontSize: prefs.codeSize }} className="text-muted-foreground">
-            {"$ df -h /var  →  /dev/sda1  50G  41G  9G  82% /var"}
-          </pre>
-        </div>
+        <Row label={t("general.terminalLineHeight")} hint={`× ${prefs.terminalLineHeight.toFixed(2)}`}>
+          <input
+            type="range"
+            min={LIMITS.terminalLineHeight[0]}
+            max={LIMITS.terminalLineHeight[1]}
+            step={0.05}
+            value={prefs.terminalLineHeight}
+            onChange={(e) => setPrefs({ terminalLineHeight: Number(e.target.value) })}
+            className="w-40 accent-primary"
+          />
+        </Row>
+        <Row label={t("general.terminalColorize")} hint={t("general.terminalColorizeHint")}>
+          <input type="checkbox" className="size-4 accent-primary" checked={prefs.terminalColorize} onChange={(e) => setPrefs({ terminalColorize: e.target.checked })} />
+        </Row>
       </section>
 
       <section>
@@ -180,11 +216,22 @@ export default function GeneralSection() {
             onChange={(sendKey) => setPrefs({ sendKey })}
           />
         </Row>
-        <Row label={t("general.expandReasoning")} hint={t("general.expandReasoningHint")}>
-          <input type="checkbox" className="size-4 accent-primary" checked={prefs.expandReasoning} onChange={(e) => setPrefs({ expandReasoning: e.target.checked })} />
-        </Row>
         <Row label={t("general.expandOutput")} hint={t("general.expandOutputHint")}>
           <input type="checkbox" className="size-4 accent-primary" checked={prefs.expandOutput} onChange={(e) => setPrefs({ expandOutput: e.target.checked })} />
+        </Row>
+        <Row label={t("general.contextWarn")} hint={t("general.contextWarnHint")}>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="number"
+              min={0}
+              max={2000}
+              step={10}
+              className={cn(fieldClass, "w-24")}
+              value={prefs.contextWarn}
+              onChange={(e) => setPrefs({ contextWarn: Math.max(0, Math.round(Number(e.target.value) || 0)) })}
+            />
+            <span className="text-xs text-muted-foreground">k</span>
+          </div>
         </Row>
       </section>
 

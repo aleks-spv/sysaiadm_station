@@ -79,4 +79,7 @@ export interface ServerPlugin {
   start?(ctx: PluginContext): () => void | Promise<void>;
   // Rewrites command output for the model (e.g. compression). null keeps it as is; a throw is logged and ignored.
   filterOutput?(ctx: PluginContext, output: ExecOutputView): Promise<FilteredOutput | null>;
+  // Hides secrets in output for the model. Runs after filterOutput and also on raw output;
+  // a throw withholds the output instead of passing it through.
+  maskOutput?(ctx: PluginContext, output: ExecOutputView): Promise<FilteredOutput | null>;
 }

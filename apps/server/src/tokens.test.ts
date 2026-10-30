@@ -69,7 +69,7 @@ test("database at user_version 1 migrates to the latest and gets api_tokens", ()
   db.close();
   const path = join(dir, "db.sqlite");
   db = openDb(path);
-  db.exec("DROP TABLE node_facts; DROP TABLE api_tokens; ALTER TABLE skills DROP COLUMN source; ALTER TABLE tasks DROP COLUMN archived_at; PRAGMA user_version = 1;");
+  db.exec("DROP TABLE node_facts; DROP TABLE api_tokens; ALTER TABLE skills DROP COLUMN source; ALTER TABLE tasks DROP COLUMN archived_at; ALTER TABLE credentials DROP COLUMN user; PRAGMA user_version = 1;");
   db.close();
   db = openDb(path);
   expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()!.user_version).toBe(SCHEMA_VERSION);

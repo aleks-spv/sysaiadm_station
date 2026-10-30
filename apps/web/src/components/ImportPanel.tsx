@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { Upload } from "lucide-react";
 import type { ImportPreview, ImportSource } from "@sysadm/shared";
 import { api, type ApplyResult } from "../api";
 import { t } from "@/i18n/settings";
@@ -21,6 +22,7 @@ export default function ImportPanel({ parentId }: { parentId: string | null }) {
   const [result, setResult] = useState<ApplyResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
 
   const upload = async () => {
     if (!file) return;
@@ -82,11 +84,22 @@ export default function ImportPanel({ parentId }: { parentId: string | null }) {
               </label>
             ))}
           </div>
-          <input type="file" accept=".rcn,.json,.xml,.ini,.yml,.yaml,.txt" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-          <div>
+          <input
+            ref={picker}
+            type="file"
+            hidden
+            accept=".rcn,.json,.xml,.ini,.yml,.yaml,.txt"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 font-medium text-primary-foreground hover:bg-primary/85 disabled:opacity-50" disabled={busy} onClick={() => picker.current?.click()}>
+              <Upload className="size-3.5" />
+              {t("import.pickFile")}
+            </button>
             <button className="h-8 rounded-lg bg-primary px-3 font-medium text-primary-foreground hover:bg-primary/85 disabled:opacity-50" disabled={!file || busy} onClick={upload}>
               {t("import.preview")}
             </button>
+            <span className="min-w-0 truncate text-xs text-muted-foreground">{file ? file.name : t("import.noFile")}</span>
           </div>
         </section>
       )}
@@ -118,7 +131,7 @@ export default function ImportPanel({ parentId }: { parentId: string | null }) {
                     <input type="checkbox" checked={!skipped.has(item.key)} onChange={() => toggle(item.key)} />
                   </td>
                   <td>{item.name}</td>
-                  <td>{item.kind === "group" ? t("import.kindGroup") : t("import.kindVm")}</td>
+                  <td>{item.kind === "vm" ? t("import.kindVm") : item.kind === "company" ? t("import.kindCompany") : t("import.kindGroup")}</td>
                   <td className="font-mono text-xs">{item.address ?? ""}</td>
                   <td>{item.action === "skip" ? <span className="rounded bg-accent px-1 text-xs">exists</span> : t("import.create")}</td>
                 </tr>

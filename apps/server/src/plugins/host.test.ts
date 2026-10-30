@@ -54,3 +54,22 @@ test("plugin routes, migrations once, enable toggle starts and stops background 
   await host.stop();
   expect(events.at(-1)).toBe("stop");
 });
+
+test("a failing secret mask withholds the output instead of passing it on", async () => {
+  const db = openDb(":memory:");
+  const dataDir = mkdtempSync(join(tmpdir(), "plugin-host-"));
+  const broken: ServerPlugin = {
+    id: "mask",
+    name: "Mask",
+    description: "test",
+    routes: () => new Hono(),
+    maskOutput: async () => {
+      throw new Error("boom");
+    },
+  };
+  const host = createPluginHost({ db, masterKey: randomBytes(32), dataDir, log: createLog({ secrets: [] }), background: false, plugins: [broken] });
+  const view = { nodeId: "n", taskId: "t", command: "cat .env", shell: "bash" as const, exitCode: 0, stdout: "TOKEN=x", stderr: "" };
+  const shown = await host.maskOutput(view, { stdout: "TOKEN=x", stderr: "" });
+  expect(shown.stdout).toBe("");
+  expect(shown.note).toContain("mask");
+});

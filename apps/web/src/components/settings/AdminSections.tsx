@@ -17,7 +17,7 @@ export const buttonClass = "h-8 rounded-lg bg-primary px-3 text-sm font-medium t
 
 export function CredentialsTab() {
   const [list, setList] = useState<Credential[]>([]);
-  const [form, setForm] = useState({ name: "", type: "key" as "key" | "password", secret: "", passphrase: "" });
+  const [form, setForm] = useState({ name: "", type: "key" as "key" | "password", user: "", secret: "", passphrase: "" });
   const [message, setMessage] = useState<string | null>(null);
 
   const load = () => api.credentials().then(setList).catch((err: unknown) => setMessage(errorText(err)));
@@ -29,12 +29,13 @@ export function CredentialsTab() {
   const create = async (e: FormEvent) => {
     e.preventDefault();
     try {
+      const user = form.user.trim() || undefined;
       const body =
         form.type === "key"
-          ? { name: form.name, type: "key" as const, privateKey: form.secret, passphrase: form.passphrase || undefined }
-          : { name: form.name, type: "password" as const, password: form.secret };
+          ? { name: form.name, type: "key" as const, user, privateKey: form.secret, passphrase: form.passphrase || undefined }
+          : { name: form.name, type: "password" as const, user, password: form.secret };
       await api.createCredential(body);
-      setForm({ name: "", type: form.type, secret: "", passphrase: "" });
+      setForm({ name: "", type: form.type, user: "", secret: "", passphrase: "" });
       setMessage(t("common.saved"));
       load();
     } catch (err) {
@@ -51,7 +52,7 @@ export function CredentialsTab() {
         {list.map((c) => (
           <li key={c.id} className="flex justify-between">
             <span>
-              {c.name} <span className="text-muted-foreground">({c.type})</span>
+              {c.name} <span className="text-muted-foreground">({c.user ? `${c.user} · ` : ""}{c.type})</span>
             </span>
             <button className="text-destructive underline" onClick={() => remove(c.id)}>
               {t("common.delete")}
@@ -65,13 +66,32 @@ export function CredentialsTab() {
           <option value="key">{t("credentials.typeKey")}</option>
           <option value="password">{t("credentials.password")}</option>
         </select>
-        <textarea
-          className={`${inputClass} col-span-2 font-mono`}
-          rows={form.type === "key" ? 4 : 1}
-          placeholder={form.type === "key" ? t("credentials.privateKey") : t("credentials.password")}
-          value={form.secret}
-          onChange={(e) => setForm({ ...form, secret: e.target.value })}
+        <input
+          className={`${inputClass} col-span-2`}
+          autoComplete="off"
+          placeholder={t("credentials.user")}
+          title={t("credentials.userHint")}
+          value={form.user}
+          onChange={(e) => setForm({ ...form, user: e.target.value })}
         />
+        {form.type === "key" ? (
+          <textarea
+            className={`${inputClass} col-span-2 font-mono`}
+            rows={4}
+            placeholder={t("credentials.privateKey")}
+            value={form.secret}
+            onChange={(e) => setForm({ ...form, secret: e.target.value })}
+          />
+        ) : (
+          <input
+            className={`${inputClass} col-span-2`}
+            type="password"
+            autoComplete="new-password"
+            placeholder={t("credentials.password")}
+            value={form.secret}
+            onChange={(e) => setForm({ ...form, secret: e.target.value })}
+          />
+        )}
         {form.type === "key" && (
           <input className={inputClass} type="password" placeholder={t("credentials.passphrase")} value={form.passphrase} onChange={(e) => setForm({ ...form, passphrase: e.target.value })} />
         )}

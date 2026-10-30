@@ -4,11 +4,15 @@ import { t } from "@/i18n/app";
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
+// Room always left for the rest of the window, so a pane can grow up to almost the whole screen.
+const KEEP_PX = 320;
+const maxWidth = () => Math.max(KEEP_PX, window.innerWidth - KEEP_PX);
+
 // Pane width remembered per browser.
-export function usePaneWidth(key: string, initial: number, min: number, max: number) {
-  const [width, setWidth] = useState(() => clamp(Number(localStorage.getItem(key)) || initial, min, max));
+export function usePaneWidth(key: string, initial: number, min: number) {
+  const [width, setWidth] = useState(() => clamp(Number(localStorage.getItem(key)) || initial, min, maxWidth()));
   useEffect(() => localStorage.setItem(key, String(width)), [key, width]);
-  return { width, setWidth: (w: number) => setWidth(clamp(w, min, max)), reset: () => setWidth(initial) };
+  return { width, setWidth: (w: number) => setWidth(clamp(w, min, maxWidth())), reset: () => setWidth(initial) };
 }
 
 // Vertical drag bar. edge="right": the pane is to the left (sidebar); edge="left": the pane is to the right (right panel).

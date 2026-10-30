@@ -3,23 +3,26 @@ import { useNavigate, useParams } from "react-router";
 import { ChevronRight, PanelRight, Square } from "lucide-react";
 import type { InventoryNode, Task } from "@sysadm/shared";
 import type { ChatCommand } from "@sysadm/shared";
-import { api, subscribeEvents, type AgentInfo, type ModelInfo, type NodeDetail, type PendingPermission } from "@/api";
+import { api, CONFIG_CHANGED, subscribeEvents, type AgentInfo, type ModelInfo, type NodeDetail, type PendingPermission, type AgentForm, type FormAnswer } from "@/api";
 import { KIND_LABEL } from "@/components/AddNodeDialog";
 import Composer, { useComposerChoice } from "@/components/Composer";
 import PermissionPrompt from "@/components/PermissionPrompt";
+import QuestionPrompt from "@/components/QuestionPrompt";
 import RightPanel from "@/components/RightPanel";
 import { STATUS_DOT } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import NodeCard from "@/components/NodeCard";
 import Transcript from "@/components/Transcript";
 import { BUILTIN_COMMANDS, expandCommand, parseSlash } from "@/lib/commands";
-import { parseMessages, toolCalls, usageOf } from "@/lib/messages";
+import { mergeTail, parseMessages, streamKey, toolCalls, usageOf } from "@/lib/messages";
 import { CHAT_WIDTH, usePrefs } from "@/lib/prefs";
 import { cn, errorText } from "@/lib/utils";
 import { t } from "@/i18n/app";
 
 // shortcut: the server pushes only status changes, so a live task is re-read on a timer; stream text deltas over SSE if this gets heavy.
 const LIVE_POLL_MS = 1000;
+const TAIL = 30;
+const CONFIG_SETTLE_MS = 1500;
 const PANEL_KEY = "sysadm.rightPanel";
 
 const STATUS_LABEL: Record<Task["status"], string> = {
@@ -51,6 +54,7 @@ export default function ChatPage() {
   const [task, setTask] = useState<Task | null>(null);
   const [messages, setMessages] = useState<unknown[]>([]);
   const [pending, setPending] = useState<PendingPermission[]>([]);
+  const [forms, setForms] = useState<AgentForm[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -72,19 +76,70 @@ export default function ChatPage() {
       .catch((err: unknown) => setError(errorText(err)));
   }, [id]);
 
+  // One reload at a time per task: events arrive in bursts, and overlapping responses landing out of
+  // order made the transcript jump back and forth. A request during a reload schedules one more after it.
+  const loading = useRef({ busy: false, again: false });
+  const messagesRef = useRef<unknown[]>([]);
   const loadTask = useCallback(() => {
     if (!taskId) return;
-    api
-      .task(taskId)
-      .then((r) => {
+    const state = loading.current;
+    if (state.busy) {
+      state.again = true;
+      return;
+    }
+    state.busy = true;
+    // Responses for a task the page already left are dropped.
+    const current = () => loading.current === state;
+    // A loaded chat refreshes only its newest messages; a long history is not re-read every second.
+    const prev = messagesRef.current;
+    const loadMessages = async () => {
+      if (prev.length) {
+        const r = await api.task(taskId, TAIL);
+        const merged = mergeTail(prev, r.messages);
+        if (merged) return { task: r.task, messages: merged };
+      }
+      return api.task(taskId);
+    };
+    Promise.all([
+      loadMessages().then((r) => {
+        if (!current()) return;
         setTask(r.task);
+        messagesRef.current = r.messages;
         setMessages(r.messages);
-      })
-      .catch((err: unknown) => setError(errorText(err)));
-    api.pendingPermissions(taskId).then(setPending).catch(() => setPending([]));
+      }),
+      api.pendingPermissions(taskId).then(
+        (p) => current() && setPending(p),
+        () => current() && setPending([]),
+      ),
+      api.taskForms(taskId).then(
+        (f) => current() && setForms(f),
+        () => current() && setForms([]),
+      ),
+    ])
+      .catch((err: unknown) => current() && setError(errorText(err)))
+      .finally(() => {
+        state.busy = false;
+        if (state.again) {
+          state.again = false;
+          loadTask();
+        }
+      });
   }, [taskId]);
 
-  useEffect(() => {
+  // Streamed tokens, flushed once per frame.
+  const [streamed, setStreamed] = useState<Record<string, string>>({});
+  const deltas = useRef<Record<string, string>>({});
+  const frame = useRef(0);
+  const addDelta = useCallback((key: string, delta: string) => {
+    deltas.current[key] = (deltas.current[key] ?? "") + delta;
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      setStreamed({ ...deltas.current });
+    });
+  }, []);
+
+  const loadChoices = useCallback(() => {
     Promise.all([api.models(), api.agents(), api.hiddenModels().catch(() => [] as string[])])
       .then(([m, a, hiddenList]) => {
         const hidden = new Set(hiddenList);
@@ -99,6 +154,22 @@ export default function ChatPage() {
       .catch(() => {});
   }, []);
 
+  // Settings changes apply live. opencode re-reads its config file on its own, so ask again a moment later.
+  useEffect(() => {
+    loadChoices();
+    let later: ReturnType<typeof setTimeout> | undefined;
+    const onChange = () => {
+      loadChoices();
+      clearTimeout(later);
+      later = setTimeout(loadChoices, CONFIG_SETTLE_MS);
+    };
+    window.addEventListener(CONFIG_CHANGED, onChange);
+    return () => {
+      clearTimeout(later);
+      window.removeEventListener(CONFIG_CHANGED, onChange);
+    };
+  }, [loadChoices]);
+
   useEffect(() => {
     setError(null);
     loadNode();
@@ -110,13 +181,28 @@ export default function ChatPage() {
   useEffect(() => {
     setTask(null);
     setMessages([]);
+    messagesRef.current = [];
     setPending([]);
+    setForms([]);
+    deltas.current = {};
+    setStreamed({});
     stick.current = true;
+    loading.current = { busy: false, again: false };
     loadTask();
-    return subscribeEvents((ev) => {
-      if ((ev.type === "task.status" && ev.taskId === taskId) || ev.type === "resync") loadTask();
+    const unsubscribe = subscribeEvents((ev) => {
+      if (ev.type === "task.delta" && ev.taskId === taskId && ev.messageId && ev.part && typeof ev.ordinal === "number" && ev.delta) {
+        addDelta(streamKey(ev.messageId, ev.part, ev.ordinal), ev.delta);
+      }
+      if (ev.type === "task.status" && ev.taskId === taskId) loadTask();
+      if (ev.type === "task.message" && ev.taskId === taskId) loadTask();
+      if (ev.type === "resync") loadTask();
     });
-  }, [taskId, loadTask]);
+    return () => {
+      unsubscribe();
+      cancelAnimationFrame(frame.current);
+      frame.current = 0;
+    };
+  }, [taskId, loadTask, addDelta]);
 
   const live = task?.status === "running" || task?.status === "waiting_permission";
   useEffect(() => {
@@ -125,16 +211,18 @@ export default function ChatPage() {
     return () => clearInterval(timer);
   }, [live, loadTask]);
 
-  const items = useMemo(() => parseMessages(messages), [messages]);
+  const items = useMemo(() => parseMessages(messages, streamed), [messages, streamed]);
   const usage = useMemo(() => usageOf(messages), [messages]);
   const calls = useMemo(() => toolCalls(items), [items]);
+  // Stop stays reachable while a command still runs, even if the task status already moved on.
+  const stoppable = live || (task?.status !== "stopped" && calls.some((c) => c.status === "running"));
   const contextLimit = models.find((m) => m.providerID === usage.model?.providerID && m.id === usage.model?.id)?.limit?.context ?? null;
 
   // Follow new output unless the user scrolled up to read.
   useEffect(() => {
     const el = scroller.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [messages, pending.length]);
+  }, [messages, streamed, pending.length, forms.length]);
 
   const togglePanel = () => {
     setPanel((p) => {
@@ -209,10 +297,31 @@ export default function ChatPage() {
 
   const stop = () => taskId && api.stopTask(taskId).then(loadTask).catch((err: unknown) => setError(errorText(err)));
 
+  const pinMessage = (messageId: string, pin: boolean) => {
+    if (!task?.sessionID) return;
+    const key = `pinned_${messageId}`;
+    const endpoint = `/api/opencode/sessions/${task.sessionID}/instructions/entry/${key}`;
+    const req = pin
+      ? fetch(endpoint, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ value: true }) })
+      : fetch(endpoint, { method: "DELETE" });
+    req.catch((err: unknown) => console.error("Pin failed:", err));
+  };
+
   const reply = async (requestID: string, decision: "once" | "always" | "reject") => {
     if (!taskId) return;
     try {
       await api.replyPermission(taskId, requestID, decision);
+      loadTask();
+    } catch (err) {
+      setError(errorText(err));
+    }
+  };
+
+  const answer = async (formID: string, value: FormAnswer | null) => {
+    if (!taskId) return;
+    try {
+      if (value) await api.replyForm(taskId, formID, value);
+      else await api.cancelForm(taskId, formID);
       loadTask();
     } catch (err) {
       setError(errorText(err));
@@ -225,6 +334,7 @@ export default function ChatPage() {
   const path = pathTo(nodes, node.id);
   // Only the first pending request is shown: Enter/Esc act on it, so two prompts would conflict.
   const first = pending[0];
+  const question = forms[0];
 
   return (
     <div className="flex min-w-0 flex-1">
@@ -321,14 +431,23 @@ export default function ChatPage() {
                 </p>
               </div>
             )}
-            <Transcript items={items} live={live} working={live && !first} />
+            <Transcript items={items} live={live} working={live && !first && !question} sessionID={task?.sessionID} onPin={pinMessage} onStop={stoppable ? stop : undefined} />
           </div>
         </div>
 
         {(host || taskId) && (
           <div className={cn("mx-auto w-full space-y-2 px-6 pb-4", CHAT_WIDTH[prefs.chatWidth])}>
+            {question && <QuestionPrompt key={question.id} form={question} onReply={(v) => answer(question.id, v)} onCancel={() => void answer(question.id, null)} />}
             {first && <PermissionPrompt permission={first} onReply={(d) => reply(first.id, d)} />}
             {error && <p className="text-xs text-destructive">{error}</p>}
+            {taskId && prefs.contextWarn > 0 && usage.lastContext >= prefs.contextWarn * 1000 && (
+              <div className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+                <span className="min-w-0 flex-1">{t("chat.contextFull", { n: Math.round(usage.lastContext / 1000) })}</span>
+                <Button size="xs" variant="outline" onClick={() => navigate(`/nodes/${id}`)}>
+                  {t("chat.newTaskShort")}
+                </Button>
+              </div>
+            )}
             <Composer
               placeholder={taskId ? t("chat.followUp") : t("chat.newTask", { name: node.name })}
               models={models}
@@ -338,7 +457,7 @@ export default function ChatPage() {
               onModel={choice.setModel}
               onAgent={choice.setAgent}
               locked={!!taskId}
-              running={live}
+              running={stoppable}
               onSend={send}
               commands={[...BUILTIN_COMMANDS, ...commands]}
               onStop={stop}

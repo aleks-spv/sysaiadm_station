@@ -31,14 +31,17 @@ export function parseRaw(raw: string): { host: string; port: number } {
   return m ? { host: m[1], port: Number(m[2]) } : { host: hostPart, port: DEFAULT_PORT };
 }
 
-export function previewImport(db: Database, tree: ImportTree): ImportPreview {
+// Imported top-level groups become organizations when the import goes to the tree root.
+const groupKind = (parentId: string | null) => (parentId === null ? ("company" as const) : ("group" as const));
+
+export function previewImport(db: Database, tree: ImportTree, targetParentId: string | null = null): ImportPreview {
   const existing = findExisting(db, tree);
   const items: ImportPreview["items"] = [];
   for (const g of tree.groups) {
     const exists = existing.has(g.key);
     items.push({
       key: g.key,
-      kind: "group",
+      kind: g.parentKey ? "group" : groupKind(targetParentId),
       name: g.name,
       parentKey: g.parentKey,
       action: exists ? "skip" : "create",
@@ -110,7 +113,7 @@ export function applyImport(
       const parentId = g.parentKey ? ensureGroup(g.parentKey) : targetParentId;
       const node = createNode(db, {
         parentId,
-        kind: "group",
+        kind: groupKind(parentId),
         name: g.name,
         user: g.user ?? null,
         port: g.port ?? null,

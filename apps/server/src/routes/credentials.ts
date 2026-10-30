@@ -11,11 +11,20 @@ interface CredentialRow {
   id: string;
   name: string;
   type: "key" | "password";
+  user: string | null;
   created_at: number;
 }
 
 function toCredential(row: CredentialRow): Credential {
-  return { id: row.id, name: row.name, type: row.type, createdAt: row.created_at };
+  return { id: row.id, name: row.name, type: row.type, user: row.user, createdAt: row.created_at };
+}
+
+// undefined: not sent; null: cleared. Same charset as a Unix login (plus DOMAIN\user and user@realm).
+const LOGIN = /^[A-Za-z0-9._@\\-]{1,64}$/;
+function optUser(value: unknown): string | null | undefined | false {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  return typeof value === "string" && LOGIN.test(value) ? value : false;
 }
 
 // Validates a secret for its type and returns the payload to seal. Never echoed back.
@@ -37,12 +46,12 @@ export function credentialsRoutes(db: Database, masterKey: Buffer, now: () => nu
   const app = new Hono();
 
   const findRow = (id: string) =>
-    db.query<CredentialRow, [string]>("SELECT id, name, type, created_at FROM credentials WHERE id = ?").get(id);
+    db.query<CredentialRow, [string]>("SELECT id, name, type, user, created_at FROM credentials WHERE id = ?").get(id);
 
   app.get("/api/credentials", (c) =>
     c.json(
       db
-        .query<CredentialRow, []>("SELECT id, name, type, created_at FROM credentials ORDER BY created_at")
+        .query<CredentialRow, []>("SELECT id, name, type, user, created_at FROM credentials ORDER BY created_at")
         .all()
         .map(toCredential),
     ),
@@ -56,12 +65,14 @@ export function credentialsRoutes(db: Database, masterKey: Buffer, now: () => nu
     }
     const payload = payloadFor(type, body ?? {});
     if (!payload) return c.json({ error: "secret is missing for this type" }, 400);
+    const user = optUser(body?.user);
+    if (user === false) return c.json({ error: "bad user" }, 400);
 
     const id = crypto.randomUUID();
     const sealed = seal(masterKey, JSON.stringify(payload), id);
     db.run(
-      "INSERT INTO credentials (id, name, type, ciphertext, iv, tag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [id, body.name, type, sealed.ciphertext, sealed.iv, sealed.tag, now()],
+      "INSERT INTO credentials (id, name, type, user, ciphertext, iv, tag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, body.name, type, user ?? null, sealed.ciphertext, sealed.iv, sealed.tag, now()],
     );
     audit(db, { actor: c.get("actor"), action: "credential_create", detail: { id, type } });
     const row = findRow(id);
@@ -77,6 +88,9 @@ export function credentialsRoutes(db: Database, masterKey: Buffer, now: () => nu
       if (typeof body.name !== "string" || body.name.length === 0) return c.json({ error: "bad name" }, 400);
       db.run("UPDATE credentials SET name = ? WHERE id = ?", [body.name, id]);
     }
+    const user = optUser(body?.user);
+    if (user === false) return c.json({ error: "bad user" }, 400);
+    if (user !== undefined) db.run("UPDATE credentials SET user = ? WHERE id = ?", [user, id]);
     const hasSecret = body?.password !== undefined || body?.privateKey !== undefined;
     if (hasSecret) {
       const payload = payloadFor(row.type, body ?? {});

@@ -1,4 +1,4 @@
-// Reads opencode V2 session messages (session.context) defensively: unknown shapes are skipped.
+// Reads opencode V2 session messages (message.list) defensively: unknown shapes are skipped.
 // All text is rendered as plain text, never as HTML.
 
 import { t } from "../i18n/app";
@@ -22,16 +22,11 @@ export interface ToolCall {
 }
 
 export type ChatItem =
-  | { kind: "user"; id: string; text: string; time: number }
-  | { kind: "text"; id: string; text: string }
+  | { kind: "user"; id: string; messageId: string; text: string; time: number }
+  | { kind: "text"; id: string; messageId: string; text: string; time: number }
   | { kind: "reasoning"; id: string; text: string; started: number | null; finished: number | null }
   | { kind: "tool"; id: string; call: ToolCall }
   | { kind: "error"; id: string; text: string };
-
-export type StepItem = Extract<ChatItem, { kind: "reasoning" | "tool" }>;
-
-// What the chat draws: consecutive reasoning and tool calls form one collapsible run of steps.
-export type ChatBlock = Exclude<ChatItem, StepItem> | { kind: "steps"; id: string; steps: StepItem[] };
 
 export interface Usage {
   input: number;
@@ -79,26 +74,41 @@ function toolCommand(input: Obj | null): string {
   return JSON.stringify(input);
 }
 
-export function parseMessages(messages: unknown[]): ChatItem[] {
+// Key of a streamed part: opencode numbers text and reasoning parts separately within a message.
+export const streamKey = (messageId: string, part: "text" | "reasoning", ordinal: number) => `${messageId}:${part}:${ordinal}`;
+
+// `streamed` holds text from live deltas; it fills parts the message list still has empty
+// and adds parts of messages the list does not show yet.
+export function parseMessages(messages: unknown[], streamed: Record<string, string> = {}): ChatItem[] {
   const items: ChatItem[] = [];
+  const used = new Set<string>();
   messages.forEach((raw, i) => {
     const m = obj(raw);
     if (!m) return;
     const id = str(m.id) || String(i);
+    const created = num(obj(m.time)?.created);
     if (m.type === "user") {
-      items.push({ kind: "user", id, text: str(m.text), time: num(obj(m.time)?.created) });
+      items.push({ kind: "user", id, messageId: id, text: str(m.text), time: created });
       return;
     }
     if (m.type !== "assistant") return;
     const content = Array.isArray(m.content) ? m.content : [];
+    const ordinals = { text: 0, reasoning: 0 };
     content.forEach((rawPart, j) => {
       const part = obj(rawPart);
       if (!part) return;
       const pid = `${id}:${j}`;
-      if (part.type === "text" && str(part.text).trim()) items.push({ kind: "text", id: pid, text: str(part.text) });
-      if (part.type === "reasoning" && str(part.text).trim()) {
-        const t = obj(part.time);
-        items.push({ kind: "reasoning", id: pid, text: str(part.text), started: time(t?.created), finished: time(t?.completed) });
+      if (part.type === "text" || part.type === "reasoning") {
+        const key = streamKey(id, part.type, ordinals[part.type]++);
+        used.add(key);
+        const text = str(part.text) || (streamed[key] ?? "");
+        if (!text.trim()) return;
+        // Stable id across streamed and stored states, so React keeps the node instead of remounting it.
+        if (part.type === "text") items.push({ kind: "text", id: key, messageId: id, text, time: created });
+        else {
+          const t = obj(part.time);
+          items.push({ kind: "reasoning", id: key, text, started: time(t?.created), finished: time(t?.completed) });
+        }
       }
       if (part.type === "tool") {
         const state = obj(part.state) ?? {};
@@ -126,19 +136,26 @@ export function parseMessages(messages: unknown[]): ChatItem[] {
     const error = obj(m.error);
     if (error) items.push({ kind: "error", id: `${id}:error`, text: str(error.message) || t("msg.modelError") });
   });
+  // Parts streaming ahead of the message list go last, in arrival order.
+  for (const [key, text] of Object.entries(streamed)) {
+    if (used.has(key) || !text.trim()) continue;
+    const [messageId, part] = key.split(":");
+    if (part === "text") items.push({ kind: "text", id: key, messageId, text, time: Date.now() });
+    else items.push({ kind: "reasoning", id: key, text, started: null, finished: null });
+  }
   return items;
 }
 
-export function groupItems(items: ChatItem[]): ChatBlock[] {
-  const blocks: ChatBlock[] = [];
-  for (const item of items) {
-    if (item.kind === "reasoning" || item.kind === "tool") {
-      const last = blocks[blocks.length - 1];
-      if (last?.kind === "steps") last.steps.push(item);
-      else blocks.push({ kind: "steps", id: item.id, steps: [item] });
-    } else blocks.push(item);
-  }
-  return blocks;
+// Puts a fresh tail of the history over the loaded one. Null when the tail does not reach the loaded
+// messages (more arrived than the tail holds): then the whole history has to be read again.
+export function mergeTail(prev: unknown[], tail: unknown[]): unknown[] | null {
+  if (tail.length === 0) return prev.length === 0 ? tail : null;
+  const first = str(obj(tail[0])?.id);
+  const at = prev.findIndex((m) => str(obj(m)?.id) === first);
+  if (at === -1) return null;
+  // Unchanged messages keep their objects, so an idle refresh re-renders nothing.
+  const merged = [...prev.slice(0, at), ...tail.map((m, i) => (JSON.stringify(m) === JSON.stringify(prev[at + i]) ? prev[at + i] : m))];
+  return merged.length === prev.length && merged.every((m, i) => m === prev[i]) ? prev : merged;
 }
 
 export function usageOf(messages: unknown[]): Usage {
@@ -166,4 +183,32 @@ export function usageOf(messages: unknown[]): Usage {
 
 export function toolCalls(items: ChatItem[]): ToolCall[] {
   return items.flatMap((item) => (item.kind === "tool" ? [item.call] : []));
+}
+
+export interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed" | "cancelled";
+}
+
+// The list a todowrite call sent; null while its input is still streaming or malformed.
+export function todoList(call: ToolCall): TodoItem[] | null {
+  try {
+    const todos = obj(JSON.parse(call.command))?.todos;
+    if (!Array.isArray(todos)) return null;
+    return todos.flatMap((raw) => {
+      const todo = obj(raw);
+      const status = (["pending", "in_progress", "completed", "cancelled"] as const).find((s) => s === todo?.status);
+      return todo && status && str(todo.content).trim() ? [{ content: str(todo.content).trim(), status }] : [];
+    });
+  } catch {
+    return null;
+  }
+}
+
+// The agent's current plan: the last todowrite call that went through.
+export function latestTodos(calls: ToolCall[]): TodoItem[] | null {
+  for (let i = calls.length - 1; i >= 0; i--) {
+    if (calls[i].name === "todowrite" && calls[i].status === "completed") return todoList(calls[i]);
+  }
+  return null;
 }
