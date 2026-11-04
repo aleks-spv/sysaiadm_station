@@ -6,6 +6,7 @@
 
 **The rise of the machines — on the sysadmin's side.**
 
+Vibe coding was just the warm-up. Meet **vibe-admining** 😎<br>
 AI agents maintain and fix your servers over SSH — you watch, approve and drink your coffee.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
@@ -15,6 +16,7 @@ AI agents maintain and fix your servers over SSH — you watch, approve and drin
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)
 ![Docker](https://img.shields.io/badge/deploy-docker%20compose-2496ed?logo=docker&logoColor=white)
 ![Agentless](https://img.shields.io/badge/hosts-agentless%20(SSH%20only)-success)
+![Vibe-admining](https://img.shields.io/badge/mode-vibe--admining%20%E2%9C%A8-ff69b4)
 
 <img src="docs/assets/screenshot.png" alt="SysAiAdm Station: server card, agent chat and terminal" width="100%">
 
