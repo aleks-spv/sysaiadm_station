@@ -73,7 +73,7 @@ Invariants:
 ## Quick start
 
 ```sh
-git clone https://github.com/aleks-spv/sysaiadm-station.git && cd sysaiadm-station
+git clone https://github.com/aleks-spv/sysaiadm_station.git && cd sysaiadm_station
 cp .env.example .env
 echo "SYSADM_MASTER_KEY=$(openssl rand -base64 32)" >> .env   # or set it by hand
 docker compose up -d
