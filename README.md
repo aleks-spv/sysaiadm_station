@@ -4,9 +4,9 @@
 
 # SysAiAdm Station
 
-**Восстание машин в помощь админам.**
+**The rise of the machines — on the sysadmin's side.**
 
-ИИ-агенты чинят и обслуживают ваши серверы по SSH — а вы смотрите, одобряете и пьёте кофе.
+AI agents maintain and fix your servers over SSH — you watch, approve and drink your coffee.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 ![Version](https://img.shields.io/badge/version-0.1.0-orange)
@@ -16,131 +16,131 @@
 ![Docker](https://img.shields.io/badge/deploy-docker%20compose-2496ed?logo=docker&logoColor=white)
 ![Agentless](https://img.shields.io/badge/hosts-agentless%20(SSH%20only)-success)
 
-<img src="docs/assets/screenshot.png" alt="SysAiAdm Station: карточка сервера, чат с агентом и терминал" width="100%">
+<img src="docs/assets/screenshot.png" alt="SysAiAdm Station: server card, agent chat and terminal" width="100%">
 
 </div>
 
 ---
 
-## Что это
+## What it is
 
-Веб-пульт сисадмина. Один `docker compose up` — и у вас консоль с деревом инфраструктуры, чатом с ИИ-агентом и терминалом. Агенты на базе [OpenCode](https://opencode.ai) V2 выполняют команды на серверах **только по SSH**: на хосты ничего не ставится, ключи и пароли модель не видит никогда.
+A web console for sysadmins. One `docker compose up` gives you an infrastructure tree, a chat with an AI agent and a terminal. Agents built on [OpenCode](https://opencode.ai) V2 run commands on your servers **over SSH only**: nothing is installed on the hosts, and the model never sees keys or passwords.
 
-Рассчитано на 20–40 гипервизоров и 250–300 ВМ: Ubuntu, Debian, Proxmox VE, Windows Server (OpenSSH + PowerShell).
+Built for 20–40 hypervisors and 250–300 VMs: Ubuntu, Debian, Proxmox VE, Windows Server (OpenSSH + PowerShell).
 
-> «Почему место на диске кончилось?», «Какие сервисы падали за сутки?», «Обнови пакеты на всей группе» — пишете задачу, агент разведывает, строит план с откатом и выполняет. Каждая команда видна, опасные — только после вашего «да».
+> "Why did the disk fill up?", "Which services crashed in the last day?", "Update packages across the whole group" — you write the task, the agent investigates, plans with a rollback and executes. Every command is visible; dangerous ones run only after your "yes".
 
-## Возможности
+## Features
 
 | | |
 |---|---|
-| 🛡️ **Безопасность прежде всего** | Ключи живут в зашифрованном хранилище (AES-256-GCM) и в процессе sysadm; модель получает только вывод. Guard команд: `deny` / только чтение / `dangerous`. TOFU-пиннинг ключей хоста на каждом хопе. Вход: пароль + TOTP. Полный аудит. |
-| 🤖 **Два агента** | **Sysadmin** делает работу (разведка → план с откатом → бэкап конфига → проверка). **Debugger** только читает и ищет причину с доказательствами. Любая модель: облако или свой llama.cpp / Ollama / vLLM. |
-| ✅ **Вы контролируете** | Только-чтение выполняется сразу, остальное ждёт: «разрешить раз», «всегда для шаблона», «отклонить». Автопилот на 4 часа — по кнопке ⚡. Кнопка «Стоп» убивает команду на сервере сигналом KILL. |
-| 🌳 **Инвентарь деревом** | Компании → группы → гипервизоры → ВМ. Креды, пользователь, порт, скилы и маршрут наследуются от предков. Jump host до 3 хопов. |
-| 📥 **Импорт за минуту** | RustConn, Remote Desktop Manager, mRemoteNG, Ansible inventory. Пароли из файлов не берутся никогда. |
-| 📇 **Карточка сервера** | `/init` собирает CPU, память, диски, ФС и сеть фиксированным скриптом — без модели и без токенов. |
-| ⏳ **Долгие операции не рвутся** | Установки и бэкапы агент запускает в `tmux` (Linux) или задачей планировщика под SYSTEM (Windows). |
-| 🧩 **Плагины** | Терминал, планировщик, WireGuard-туннели, маскировка секретов в выводе, сжатие вывода (RTK). Свои — по [docs/plugins.md](docs/plugins.md). |
-| 📚 **Скилы** | systemd, диски, логи, сеть, hardening, Proxmox, PowerShell… Свои пишутся в UI или ставятся из GitHub. |
-| 🔌 **REST API** | Bearer-токены со scope'ами и сроком — для скриптов, мобилок и других агентов. [docs/api.md](docs/api.md) |
-| 🌍 **RU / EN** | Светлая и тёмная тема, акцентный цвет, шрифты. Перевод на свой язык — [docs/i18n.md](docs/i18n.md). |
+| 🛡️ **Security first** | Keys live in an encrypted vault (AES-256-GCM) inside the sysadm process; the model only gets command output. Command guard: `deny` / read-only / `dangerous`. TOFU host-key pinning on every hop. Login: password + TOTP. Full audit log. |
+| 🤖 **Two agents** | **Sysadmin** does the work (recon → plan with rollback → config backup → verification). **Debugger** only reads and finds the root cause with evidence. Any model: cloud or your own llama.cpp / Ollama / vLLM. |
+| ✅ **You stay in control** | Read-only commands run immediately, everything else waits: "allow once", "always for this pattern", "deny". Autopilot for 4 hours with the ⚡ button. "Stop" kills the command on the server with SIGKILL. |
+| 🌳 **Inventory as a tree** | Companies → groups → hypervisors → VMs. Credentials, user, port, skills and route are inherited from ancestors. Jump hosts up to 3 hops. |
+| 📥 **Import in a minute** | RustConn, Remote Desktop Manager, mRemoteNG, Ansible inventory. Passwords are never taken from files. |
+| 📇 **Server card** | `/init` collects CPU, memory, disks, filesystems and network with a fixed script — no model, no tokens. |
+| ⏳ **Long operations survive disconnects** | The agent runs installs and backups in `tmux` (Linux) or as a one-off scheduled task under SYSTEM (Windows). |
+| 🧩 **Plugins** | Terminal, scheduler, WireGuard tunnels, secret masking in output, output compression (RTK). Write your own: [docs/plugins.md](docs/plugins.md). |
+| 📚 **Skills** | systemd, disks, logs, networking, hardening, Proxmox, PowerShell… Write your own in the UI or install from GitHub. |
+| 🔌 **REST API** | Bearer tokens with scopes and expiry — for scripts, mobile apps and other agents. [docs/api.md](docs/api.md) |
+| 🌍 **EN / RU** | Light and dark themes, accent color, fonts. Add your language: [docs/i18n.md](docs/i18n.md). |
 
-## Как устроено
+## How it works
 
 ```
-браузер ──HTTPS──▶ caddy (:443, единственный опубликованный порт)
+browser ──HTTPS──▶ caddy (:443, the only published port)
                      │
                      ▼
-                   sysadm (Bun + Hono): SQLite, зашифрованные креды, инвентарь, SSH
-                     │  REST к opencode на 127.0.0.1 (дочерний процесс sysadm)
+                   sysadm (Bun + Hono): SQLite, encrypted credentials, inventory, SSH
+                     │  REST to opencode on 127.0.0.1 (child process of sysadm)
                      ▼
-                   opencode serve + плагин sysadm: инструменты remote_exec, web_search
-                     │  POST http://127.0.0.1:3001/internal/* (Bearer, новый токен на каждый старт)
+                   opencode serve + sysadm plugin: remote_exec, web_search tools
+                     │  POST http://127.0.0.1:3001/internal/* (Bearer, new token on every start)
                      ▼
-                   sysadm выполняет команду по SSH ──▶ [бастион(ы)] ──▶ хост
+                   sysadm runs the command over SSH ──▶ [bastion(s)] ──▶ host
 ```
 
-Инварианты:
-- Ключи и пароли не попадают в процесс opencode и в контекст модели. SSH и расшифровка — только в процессе sysadm.
-- Модель не выбирает хост и маршрут. Плагин передаёт `sessionID` и команду, узел берётся из таблицы задач.
-- У агента нет других инструментов, кроме `remote_exec`, `skill`, `question` и (если включён) `web_search`. Shell, webfetch, чтение и правка файлов запрещены политикой.
-- Команды проходят guard: `deny` блокирует, `read` (белый список, `apps/server/src/readonly.ts`) идёт без вопроса, `dangerous` всегда требует подтверждения. Regex-проверка best-effort и не даёт гарантии — подтверждение остаётся за вами.
-- Каждое действие пишется в аудит.
+Invariants:
+- Keys and passwords never reach the opencode process or the model context. SSH and decryption happen only in the sysadm process.
+- The model does not choose the host or the route. The plugin sends a `sessionID` and a command; the node comes from the task table.
+- The agent has no tools besides `remote_exec`, `skill`, `question` and (if enabled) `web_search`. Shell, webfetch, file reads and edits are denied by policy.
+- Commands pass the guard: `deny` blocks, `read` (allowlist, `apps/server/src/readonly.ts`) runs without asking, `dangerous` always needs confirmation. The regex check is best-effort, not a guarantee — the final approval is yours.
+- Every action is written to the audit log.
 
-## Быстрый старт
+## Quick start
 
 ```sh
-git clone <url-репозитория> sysaiadm && cd sysaiadm
+git clone https://github.com/aleks-spv/sysaiadm-station.git && cd sysaiadm-station
 cp .env.example .env
-echo "SYSADM_MASTER_KEY=$(openssl rand -base64 32)" >> .env   # или впишите вручную
+echo "SYSADM_MASTER_KEY=$(openssl rand -base64 32)" >> .env   # or set it by hand
 docker compose up -d
 ```
 
-Откройте `https://localhost`, задайте пароль администратора, отсканируйте TOTP — готово.
+Open `https://localhost`, set the admin password, scan the TOTP code — done.
 
 > [!IMPORTANT]
-> **Потеря `SYSADM_MASTER_KEY` = потеря всех кредов.** Храните его отдельно от тома `sysadm-data`.
+> **Losing `SYSADM_MASTER_KEY` means losing every credential.** Keep it separate from the `sysadm-data` volume.
 
 > [!NOTE]
-> opencode в образ не зашит: при первом старте сервер скачивает последнюю 2.x из npm в `/data/opencode/bin` (~250 МБ, до пары минут). Контейнеру нужен выход на `registry.npmjs.org`; для скилов из GitHub — на `github.com`.
+> opencode is not baked into the image: on first start the server downloads the latest 2.x from npm into `/data/opencode/bin` (~250 MB, up to a couple of minutes). The container needs access to `registry.npmjs.org`, and to `github.com` for skills from GitHub.
 
-При `SYSADM_TLS=internal` браузер ругнётся на сертификат. Корневой сертификат Caddy: `docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt .`
+With `SYSADM_TLS=internal` the browser warns about the certificate. Get Caddy's root certificate: `docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt .`
 
-## Работа с агентом
+## Working with the agent
 
-На узле — «Новая задача», описываете, что нужно. Ответ идёт потоком: команды (клик — полный вывод в цветах терминала), размышления, загрузка скилов, план. У сообщений есть копирование и закрепление в контексте («Pin»). Когда контекст переваливает порог (по умолчанию 180 тыс. токенов), чат предлагает начать новую задачу; старая часть разговора сжимается плагином [DCP](https://www.npmjs.com/package/@tarquinen/opencode-dcp).
+On a node, click "New task" and describe what you need. The reply streams live: commands (click for the full output in terminal colors), reasoning, skill loading, the plan. Messages can be copied and pinned to the context. When the context passes a threshold (180k tokens by default), the chat suggests starting a new task; older parts of the conversation are compressed by the [DCP](https://www.npmjs.com/package/@tarquinen/opencode-dcp) plugin.
 
-Слеш-команды: `/health`, `/disk`, `/logs`, `/updates`, `/security`, `/net`, `/service` и свои в «Настройки → Команды».
+Slash commands: `/health`, `/disk`, `/logs`, `/updates`, `/security`, `/net`, `/service`, plus your own in "Settings → Commands".
 
-Задачи под сервером архивируются, а не удаляются (аудит); архив чистится через 90 дней.
+Tasks are archived, not deleted (audit); the archive is cleaned up after 90 days.
 
-**Встроенный узел `SysAiAdm/localhost`** — сам контейнер станции. На нём агент может посмотреть, что происходит со станцией, и поправить конфиг opencode через `sysadm-oc` — только как `dangerous`-команда с вашим подтверждением. Удалить или перенести этот узел нельзя.
+**Built-in node `SysAiAdm/localhost`** is the station's own container. The agent can inspect the station there and adjust the opencode config through `sysadm-oc` — only as a `dangerous` command with your approval. This node cannot be deleted or moved.
 
-## Модели, агенты, скилы
+## Models, agents, skills
 
-- **Провайдеры** — ключи облачных провайдеров и свои OpenAI-совместимые (llama.cpp, Ollama, LM Studio, vLLM, шлюз). Ключи хранит opencode и повторно не показывает.
-- **Модели** — скрыть лишнее из списков.
-- **Агенты** — для Sysadmin и Debugger: модель, уровень мышления, промпт, цвет, лимит шагов.
-- **Конфиг opencode** — JSON поверх базового и плагины opencode. `permissions` и `policies` заперты.
-- **Скилы** — встроенные взяты из открытых MIT-репозиториев ([skills/NOTICE.md](skills/NOTICE.md)). Отмечаются на узле и наследуются от компании и группы; скилы по ОС подключаются сами.
-- **Веб-поиск** — свой SearXNG (нужен `search.formats: [html, json]`) или Exa, Tavily, Firecrawl, Parallel, TinyFish. По умолчанию выключен. Запрос с внутренним IP или адресом из инвентаря отклоняется, каждый поиск — в аудит.
+- **Providers** — keys for cloud providers and your own OpenAI-compatible endpoints (llama.cpp, Ollama, LM Studio, vLLM, gateways). Keys are stored by opencode and never shown again.
+- **Models** — hide what you don't need from the lists.
+- **Agents** — for Sysadmin and Debugger: model, reasoning level, prompt, color, step limit.
+- **opencode config** — extra JSON on top of the base config, plus opencode plugins. `permissions` and `policies` are locked.
+- **Skills** — built-in ones come from open MIT-licensed repositories ([skills/NOTICE.md](skills/NOTICE.md)). Enable them per node; they are inherited from the company and group, and OS-specific skills are attached automatically.
+- **Web search** — your own SearXNG (needs `search.formats: [html, json]`) or Exa, Tavily, Firecrawl, Parallel, TinyFish. Off by default. Queries containing internal IPs or inventory addresses are rejected; every search is audited.
 
-## Плагины
+## Plugins
 
-Включаются в «Настройки → Плагины». Каждый — отдельный пакет в `plugins/<id>`.
+Enable them in "Settings → Plugins". Each one is a separate package in `plugins/<id>`.
 
-- **Терминал** — SSH-сессия в правой панели. Копирование: выделение + Ctrl+C или Ctrl+Shift+C, вставка — Ctrl+V (буфер обмена только по HTTPS).
-- **Планировщик** — задачи агенту по расписанию: однократно, ежедневно, по дням недели, раз в месяц.
-- **WireGuard** — клиентские туннели к площадкам, автозапуск, статус. Нужны `NET_ADMIN` и модуль ядра wireguard.
-- **Маскировка секретов** — пароли, токены и приватные ключи в выводе заменяются на `***` до того, как их увидит модель. Сбой маскировки — вывод не отдаётся.
-- **Экономия токенов (RTK)** — сжимает длинный вывод и считает статистику.
+- **Terminal** — an SSH session in the right panel. Copy: select + Ctrl+C or Ctrl+Shift+C; paste: Ctrl+V (clipboard needs HTTPS).
+- **Scheduler** — agent tasks on a schedule: once, daily, on weekdays, monthly.
+- **WireGuard** — client tunnels to your sites, autostart, status. Needs `NET_ADMIN` and the wireguard kernel module.
+- **Secret masking** — passwords, tokens and private keys in output are replaced with `***` before the model sees them. If masking fails, the output is withheld.
+- **Token savings (RTK)** — compresses long output and tracks the savings.
 
-## Инвентарь и подключение
+## Inventory and connections
 
-Узлы: `company`, `group`, `hypervisor`, `vm`. Креды, пользователь, порт и оболочка наследуются от ближайшего предка. Креды назначаются на компанию или группу, а не на каждую ВМ.
+Node types: `company`, `group`, `hypervisor`, `vm`. Credentials, user, port and shell are inherited from the nearest ancestor. Assign credentials to a company or group, not to every VM.
 
-**Jump host.** Любой узел может быть бастионом. Режим подключения: `inherit` (от предка), `direct`, `via` (через выбранный узел, до 3 хопов). Каждый хоп — свои креды и **свой** закреплённый ключ хоста (TOFU). Ключ сменился — выполнение отказывает с указанием хопа, сброс только руками («Сбросить ключ хоста»). Ошибки маршрута: `JUMP_CYCLE`, `JUMP_TOO_DEEP`, `JUMP_NO_ADDRESS`.
+**Jump hosts.** Any node can be a bastion. Connection mode: `inherit` (from an ancestor), `direct`, `via` (through a chosen node, up to 3 hops). Each hop uses its own credentials and **its own** pinned host key (TOFU). If a key changes, execution fails and names the hop; reset is manual only ("Reset host key"). Route errors: `JUMP_CYCLE`, `JUMP_TOO_DEEP`, `JUMP_NO_ADDRESS`.
 
-**Импорт** — предпросмотр, затем применение одной транзакцией. Повторный импорт идемпотентен.
+**Import** — preview first, then apply in a single transaction. Re-importing the same file is idempotent.
 
-| Источник | Как получить файл |
+| Source | How to get the file |
 |---|---|
 | RustConn | `rustconn-cli export -f native -o inventory.rcn` |
 | Remote Desktop Manager | File → Export → Export All (.json) |
-| mRemoteNG | `confCons.xml` **без шифрования** (без `FullFileEncryption`) |
-| Ansible | `inventory.ini` или `inventory.yml` |
+| mRemoteNG | `confCons.xml` **unencrypted** (no `FullFileEncryption`) |
+| Ansible | `inventory.ini` or `inventory.yml` |
 
-Пароли из файлов не импортируются никогда; путь к ключу попадает только в заметки узла. Файл до 5 МБ, XML с `<!DOCTYPE`/`<!ENTITY` отклоняется.
+Passwords are never imported from files; key paths only go into node notes. Files up to 5 MB; XML with `<!DOCTYPE`/`<!ENTITY` is rejected.
 
-**Экспорт и перенос** — правый клик по узлу → «Экспорт…». Всё дерево или ветка в файл `.sysaiadm`, всегда зашифрованный паролем (AES-256-GCM, scrypt, пароль от 12 символов). С галочкой «С паролями и ключами» внутрь попадают учётки.
+**Export and migration** — right-click a node → "Export…". The whole tree or a branch goes into a `.sysaiadm` file, always password-encrypted (AES-256-GCM, scrypt, password of 12+ characters). With "Include passwords and keys" the credentials go inside too.
 
-## Эксплуатация
+## Operations
 
 <details>
-<summary><b>Свой nginx вместо caddy</b></summary>
+<summary><b>Your own nginx instead of caddy</b></summary>
 
-Уберите сервис `caddy` из compose, опубликуйте порт `8080` контейнера `sysadm` (лучше на `127.0.0.1`) или подключите его к сети nginx. Папки хоста вместо томов должны принадлежать uid 1000: `chown -R 1000:1000 /opt/sysadm`.
+Remove the `caddy` service from compose and publish port `8080` of the `sysadm` container (preferably on `127.0.0.1`) or attach it to nginx's network. Host folders used instead of volumes must belong to uid 1000: `chown -R 1000:1000 /opt/sysadm`.
 
 ```yaml
 services:
@@ -157,85 +157,87 @@ services:
     volumes:
       - /opt/sysadm/data:/data
       - /opt/sysadm/infra:/infra
-      # - /mnt/backup/sysadm:/data/backups   # копии базы на другом диске
+      # - /mnt/backup/sysadm:/data/backups   # database backups on another disk
 ```
 
 ```nginx
 location / {
     proxy_pass http://127.0.0.1:8080;
     proxy_http_version 1.1;
-    proxy_set_header Host $http_host;              # с портом: терминал сверяет Origin с Host
-    proxy_set_header X-Forwarded-For $remote_addr; # не $proxy_add_x_forwarded_for: по нему лимит попыток входа
+    proxy_set_header Host $http_host;              # with port: the terminal checks Origin against Host
+    proxy_set_header X-Forwarded-For $remote_addr; # not $proxy_add_x_forwarded_for: login rate limit uses it
     proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header Upgrade $http_upgrade;        # WebSocket для терминала
+    proxy_set_header Upgrade $http_upgrade;        # WebSocket for the terminal
     proxy_set_header Connection $connection_upgrade;
-    proxy_buffering off;                           # живые события (SSE)
+    proxy_buffering off;                           # live events (SSE)
     proxy_read_timeout 1h;
-    client_max_body_size 6m;                       # импорт файлов
+    client_max_body_size 6m;                       # file import
 }
 ```
 
-`$connection_upgrade` объявляется в `http {}`: `map $http_upgrade $connection_upgrade { default upgrade; '' close; }`. Только HTTPS: cookie сессии с флагом Secure.
+Declare `$connection_upgrade` in `http {}`: `map $http_upgrade $connection_upgrade { default upgrade; '' close; }`. HTTPS only: the session cookie has the Secure flag.
 </details>
 
 <details>
-<summary><b>Бэкап и восстановление</b></summary>
+<summary><b>Backup and restore</b></summary>
 
-Копии базы делаются сами: раз в 24 часа, хранятся 7 последних, в `/data/backups`, через `VACUUM INTO` без остановки сервиса. Расписание, «Сделать копию сейчас», скачивание — «Настройки → Резервные копии».
+Database backups are automatic: every 24 hours, last 7 kept, in `/data/backups`, via `VACUUM INTO` without stopping the service. Schedule, "Back up now" and downloads are in "Settings → Backups".
 
-Храните отдельно:
-- копии базы (или весь том `sysadm-data`);
-- `.env` с `SYSADM_MASTER_KEY` — без него копия бесполезна;
-- том `infra` можно не сохранять: пересоздаётся из инвентаря при старте.
+Keep separately:
+- the database backups (or the whole `sysadm-data` volume);
+- `.env` with `SYSADM_MASTER_KEY` — without it a backup is useless;
+- the `infra` volume is optional: it is rebuilt from the inventory on start.
 
-Восстановление: остановить контейнер, положить копию на место `/data/sysadm.sqlite`, удалить рядом `-wal` и `-shm`, запустить.
+Restore: stop the container, put the backup at `/data/sysadm.sqlite`, delete the `-wal` and `-shm` files next to it, start.
 </details>
 
 <details>
-<summary><b>Обновление opencode</b></summary>
+<summary><b>Updating opencode</b></summary>
 
-Раз в 6 часов сервер проверяет новую версию `@opencode/cli`. Вышла — справа внизу окошко «Обновить»: скачивание, сверка контрольной суммы, перезапуск. Не поднялась за 60 секунд — откат на прежнюю. Автоматически ставится только 2.x. Если задан `OPENCODE_BIN`, обновления выключены.
+Every 6 hours the server checks for a new `@opencode/cli`. When one is out, an "Update" popup appears at the bottom right: download, checksum verification, restart. If the new version doesn't come up within 60 seconds, the previous one is restored. Only 2.x is installed automatically. If `OPENCODE_BIN` is set, updates are disabled.
 </details>
 
 <details>
-<summary><b>Подготовка Windows Server</b></summary>
+<summary><b>Preparing Windows Server</b></summary>
 
-1. Установите OpenSSH Server.
-2. Публичный ключ — в `C:\ProgramData\ssh\administrators_authorized_keys`.
-3. PowerShell оболочкой по умолчанию:
+1. Install OpenSSH Server.
+2. Put the public key into `C:\ProgramData\ssh\administrators_authorized_keys`.
+3. Make PowerShell the default shell:
    ```powershell
    New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell -Value "C:\Program Files\PowerShell\7\pwsh.exe" -PropertyType String -Force
    ```
-   Без PowerShell 7 — `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`.
+   Without PowerShell 7, use `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`.
 </details>
 
 <details>
-<summary><b>Переменные окружения, логи и dev-режим</b></summary>
+<summary><b>Environment variables, logs and dev mode</b></summary>
 
-- `SYSADM_DOMAIN`, `SYSADM_TLS` (`internal` — самоподписанный CA Caddy), `SYSADM_HTTPS_PORT` — TLS и порт.
-- `LOG_LEVEL` — `debug` | `info` | `warn` | `error`, по умолчанию `info`. Логи — в `docker logs` и на странице «Система».
-- `GITHUB_TOKEN` — необязательно, для установки скилов из GitHub.
-- `SYSADM_ENV=dev` — **только для стенда**: отключает проверку TOTP (пароль, лимит попыток, guard, шифрование, TOFU и CSRF остаются). На входе видна плашка «DEV-режим». Любое другое значение, кроме `prod`, роняет сервис.
+- `SYSADM_DOMAIN`, `SYSADM_TLS` (`internal` — Caddy's self-signed CA), `SYSADM_HTTPS_PORT` — TLS and port.
+- `LOG_LEVEL` — `debug` | `info` | `warn` | `error`, default `info`. Logs go to `docker logs` and the "System" page.
+- `GITHUB_TOKEN` — optional, for installing skills from GitHub.
+- `SYSADM_ENV=dev` — **test stands only**: disables the TOTP check (password, rate limit, guard, encryption, TOFU and CSRF stay on). The login page shows a "DEV mode" banner. Any value other than `dev` or `prod` makes the service refuse to start.
 
-Чек-лист перед продом: `grep -c '^SYSADM_ENV' .env` → `0`.
+Pre-production checklist: `grep -c '^SYSADM_ENV' .env` → `0`.
 </details>
 
-## Разработка
+## Development
 
 ```sh
 bun install
 bun run dev
-bun test            # 400+ тестов
+bun test            # 400+ tests
 bun run typecheck
 bun run build
 ```
 
-Структура: `apps/server` (Hono API, SQLite, vault, guard, SSH, импорт), `apps/web` (React + shadcn/ui + Tailwind v4), `packages/shared` (общие типы), `packages/plugin` (плагин opencode: `remote_exec`, `web_search`), `plugins/*` (плагины станции), `skills/` (встроенные скилы). Документация: [API](docs/api.md) · [плагины](docs/plugins.md) · [i18n](docs/i18n.md).
+Layout: `apps/server` (Hono API, SQLite, vault, guard, SSH, import), `apps/web` (React + shadcn/ui + Tailwind v4), `packages/shared` (shared types), `packages/plugin` (opencode plugin: `remote_exec`, `web_search`), `plugins/*` (station plugins), `skills/` (built-in skills). Docs: [API](docs/api.md) · [plugins](docs/plugins.md) · [i18n](docs/i18n.md).
 
-Пулл-реквесты приветствуются. Принимая PR, автор просит согласие на двойное лицензирование (см. ниже).
+Pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Contributors sign the [CLA](CLA.md) once, via a bot comment on the first pull request.
 
-## Лицензия
+## License
 
-Copyright © 2026 Aleks ([@aleks-spv](https://github.com/aleks-spv)). Это **Community Edition** под [GNU AGPL-3.0](LICENSE) (`AGPL-3.0-only`): используйте, меняйте и распространяйте свободно, но изменённую версию, которую вы даёте использовать другим (в том числе по сети), нужно публиковать с исходным кодом под той же лицензией.
+Copyright © 2026 Aleks ([@aleks-spv](https://github.com/aleks-spv)). This is the **Community Edition**, licensed under [GNU AGPL-3.0](LICENSE) (`AGPL-3.0-only`): use, modify and share it freely, but if you let others use a modified version (including over a network), you must publish its source under the same license.
 
-Для использования без условий AGPL (закрытые доработки, встраивание в коммерческий продукт) автор может выдать коммерческую лицензию.
+For use without the AGPL terms (closed modifications, embedding in a commercial product), a commercial license is available from the author.
+
+Built-in skills are third-party works under the MIT license; see [skills/NOTICE.md](skills/NOTICE.md).
