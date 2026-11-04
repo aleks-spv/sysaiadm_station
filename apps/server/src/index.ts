@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
-import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { readdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -26,12 +26,15 @@ import { makeClient, type OpenCodeClient } from "./opencode";
 import { createOpencodeInstaller, type OpencodeInstaller } from "./opencode-install";
 import { frontmatter } from "./skills-github";
 import { startOpencode, type OpencodeProc } from "./opencode-proc";
-import { buildOpencodeConfig, getOverlay, writeDcpConfig, writeOpencodeConfig, type Overlay } from "./opencode-config";
+import { buildOpencodeConfig, DISABLED_PROVIDERS_KEY, getOverlay, writeDcpConfig, writeOpencodeConfig, type Overlay } from "./opencode-config";
 import { opencodeSettingsRoutes } from "./routes/opencode-settings";
+import { getSetting } from "./settings";
 import { createPluginHost } from "./plugins/host";
 import { PLUGINS } from "./plugins";
 import { createLog, parseLevel, type Log, type LogLevel } from "./log";
 import { loadMasterKey } from "./vault";
+import { seedLocalhost } from "./localhost";
+import { selfAdminRoutes } from "./routes/selfadmin";
 
 const MAX_BODY = 1024 * 1024;
 const MAX_IMPORT_BODY = 5 * 1024 * 1024;
@@ -55,6 +58,8 @@ export interface Config {
   devMode: boolean;
   // Raises the GitHub API limit for skill installs; optional.
   githubToken?: string;
+  // Private key for the container's own sshd (set in the image); seeds the localhost node.
+  localSshKey?: string;
 }
 
 // Secrets generated on every start; they never reach the .env file.
@@ -64,6 +69,8 @@ export interface Runtime {
   log: Log;
   proc: Pick<OpencodeProc, "status" | "restart">;
   installer?: OpencodeInstaller;
+  // Token of `sysadm-oc` (the localhost node's agent); written to <dataDir>/selfadmin.json, readable by uid 1000 only.
+  selfAdminToken?: string;
 }
 
 export class ConfigError extends Error {}
@@ -104,6 +111,7 @@ export function readConfig(env: Record<string, string | undefined>): Config {
     dbPath,
     dataDir: env.DATA_DIR ?? dirname(dbPath),
     githubToken: env.GITHUB_TOKEN || undefined,
+    localSshKey: env.LOCAL_SSH_KEY || undefined,
     skillsDir: env.SKILLS_DIR ?? "/app/skills",
     webDist: env.WEB_DIST ?? "apps/web/dist",
     publicPort,
@@ -171,8 +179,10 @@ export async function buildApp(config: Config, options: { background: boolean; r
   });
   const bus = createBus();
   syncBuiltinSkills(db, config.skillsDir);
+  seedLocalhost(db, config.masterKey, config.localSshKey);
   const base = JSON.parse(readFileSync(new URL("../opencode.base.json", import.meta.url), "utf8")) as Record<string, unknown>;
-  const applyOverlay = (overlay: Overlay) => writeOpencodeConfig(config.infraDir, buildOpencodeConfig(base, config.pluginPath, overlay));
+  const applyOverlay = (overlay: Overlay) =>
+    writeOpencodeConfig(config.infraDir, buildOpencodeConfig(base, config.pluginPath, overlay, getSetting<string[]>(db, DISABLED_PROVIDERS_KEY) ?? []));
   applyOverlay(getOverlay(db));
   await materializeAll(db, config.infraDir);
   const taskDeps = { db, client, infraDir: config.infraDir };
@@ -249,6 +259,9 @@ export async function buildApp(config: Config, options: { background: boolean; r
   app.get("*", serveStatic({ root: config.webDist }), serveStatic({ root: config.webDist, path: "index.html" }));
 
   const internalApp = createInternalApp({ db, token: runtime.internalToken, masterKey: config.masterKey, filterOutput: plugins.filterOutput, maskOutput: plugins.maskOutput, webSearch });
+  if (runtime.selfAdminToken) {
+    internalApp.route("/", selfAdminRoutes({ db, token: runtime.selfAdminToken, client, apply: applyOverlay, proc: runtime.proc, installer: runtime.installer }));
+  }
 
   return {
     publicApp: app,
@@ -271,8 +284,10 @@ if (import.meta.main) {
   }
   const internalToken = randomBytes(32).toString("hex");
   const opencodePassword = randomBytes(32).toString("hex");
+  // Only the image has the localhost node; sysadm-oc (run as uid 1000 via sudo) reads the token file, the agent's user cannot.
+  const selfAdminToken = config.localSshKey ? randomBytes(32).toString("hex") : undefined;
   const level = parseLevel(process.env.LOG_LEVEL);
-  const log = createLog({ secrets: [process.env.SYSADM_MASTER_KEY ?? "", internalToken, opencodePassword], minLevel: level ?? "info" });
+  const log = createLog({ secrets: [process.env.SYSADM_MASTER_KEY ?? "", internalToken, opencodePassword, selfAdminToken ?? ""], minLevel: level ?? "info" });
   if (level === null) log.write("app", "warn", `LOG_LEVEL=${process.env.LOG_LEVEL} is not recognised (debug, info, warn, error); using info`);
 
   // buildApp writes opencode.json, so the child starts after it; status/restart reach the child through this holder.
@@ -283,7 +298,10 @@ if (import.meta.main) {
     external: config.opencodeBin,
     log: (level, line) => log.write("app", level, line),
   });
-  const built = await buildApp(config, { background: true, runtime: { internalToken, opencodePassword, log, proc: procRef, installer } });
+  if (selfAdminToken) {
+    writeFileSync(join(config.dataDir, "selfadmin.json"), JSON.stringify({ port: config.internalPort, token: selfAdminToken }), { mode: 0o600 });
+  }
+  const built = await buildApp(config, { background: true, runtime: { internalToken, opencodePassword, log, proc: procRef, installer, selfAdminToken } });
   // First start on an empty volume downloads opencode; on failure the child backs off until the admin installs it.
   await installer.ensure();
   writeDcpConfig(config.opencodeHome);

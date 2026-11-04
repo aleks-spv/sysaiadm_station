@@ -4,7 +4,7 @@ import { api, type IntegrationInfo, type WebSearchProvider, type WebSearchResult
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { t } from "@/i18n/settings";
-import { errorText, fieldClass } from "@/lib/utils";
+import { errorText, fieldClass, safeHref } from "@/lib/utils";
 
 // Built into opencode; the key is stored as an opencode integration (same path as model provider keys).
 const BUILTIN: Array<{ id: WebSearchProvider; name: string; keyOptional?: boolean }> = [
@@ -113,9 +113,13 @@ export default function WebSearchSection() {
           <ol className="list-decimal space-y-2 pl-5 text-sm">
             {results.map((r) => (
               <li key={r.url}>
-                <a href={r.url} target="_blank" rel="noreferrer" className="font-medium underline-offset-2 hover:underline">
-                  {r.title || r.url}
-                </a>
+                {safeHref(r.url) ? (
+                  <a href={safeHref(r.url)} target="_blank" rel="noreferrer" className="font-medium underline-offset-2 hover:underline">
+                    {r.title || r.url}
+                  </a>
+                ) : (
+                  <span className="font-medium break-all">{r.title || r.url}</span>
+                )}
                 <p className="line-clamp-2 text-xs text-muted-foreground">{r.content}</p>
               </li>
             ))}

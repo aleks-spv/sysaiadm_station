@@ -3,6 +3,8 @@ import { mkdir, readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { EffectiveNode, InventoryNode, NodeFacts, OsKind, ShellKind } from "@sysadm/shared";
 import { factsMarkdown, getFacts } from "./facts";
+import { LOCALHOST_NODE, SYSADM_OC_RULES } from "./localhost";
+import { getSetting } from "./settings";
 import { dependentsOfJump, descendants, getNode, getTree, resolveEffective } from "./inventory";
 
 const JUMP_ERRORS = ["JUMP_CYCLE", "JUMP_TOO_DEEP", "JUMP_NO_ADDRESS"];
@@ -42,6 +44,7 @@ function agentsMd(
   routeError: string | null,
   facts: NodeFacts | null,
   skills: Array<{ id: string; description: string }>,
+  extra: string[] = [],
 ): string {
   const address = eff?.address || node.address || "не задан";
   const shell = eff?.shell ?? node.shell ?? defaultShell(node.os);
@@ -69,6 +72,7 @@ function agentsMd(
     "Команды выполняй только инструментом `remote_exec`. Локальной машины нет.",
     ...skillList,
     ...card,
+    ...extra,
     "",
     "## Заметки",
     notes,
@@ -80,11 +84,16 @@ export async function removeNode(infraDir: string, nodeId: string): Promise<void
   await rm(nodeDir(infraDir, nodeId), { recursive: true, force: true });
 }
 
-export async function materializeNode(db: Database, infraDir: string, nodeId: string): Promise<void> {
+// byId lets batch callers read the tree once instead of once per node.
+export async function materializeNode(
+  db: Database,
+  infraDir: string,
+  nodeId: string,
+  byId = new Map(getTree(db).map((n) => [n.id, n])),
+): Promise<void> {
   const node = getNode(db, nodeId);
   if (!node) return removeNode(infraDir, nodeId);
 
-  const byId = new Map(getTree(db).map((n) => [n.id, n]));
   let eff: EffectiveNode | null = null;
   let routeError: string | null = null;
   try {
@@ -102,7 +111,7 @@ export async function materializeNode(db: Database, infraDir: string, nodeId: st
   const skillList = [...skills].map(([id, s]) => ({ id, description: s.description }));
 
   const dir = nodeDir(infraDir, nodeId);
-  await writeAtomic(join(dir, "AGENTS.md"), agentsMd(node, byId, eff, routeError, getFacts(db, nodeId), skillList));
+  await writeAtomic(join(dir, "AGENTS.md"), agentsMd(node, byId, eff, routeError, getFacts(db, nodeId), skillList, getSetting(db, LOCALHOST_NODE) === nodeId ? ["", SYSADM_OC_RULES] : []));
   const skillsRoot = join(dir, ".opencode", "skills");
   for (const [skillId, { content }] of skills) {
     await writeAtomic(join(skillsRoot, skillId, "SKILL.md"), content);
@@ -113,11 +122,13 @@ export async function materializeNode(db: Database, infraDir: string, nodeId: st
 // A node, its subtree, and every node whose jump chain goes through it.
 export async function materializeSubtree(db: Database, infraDir: string, nodeId: string): Promise<void> {
   const ids = new Set([nodeId, ...descendants(db, nodeId), ...dependentsOfJump(db, nodeId)]);
-  for (const id of ids) await materializeNode(db, infraDir, id);
+  const byId = new Map(getTree(db).map((n) => [n.id, n]));
+  for (const id of ids) await materializeNode(db, infraDir, id, byId);
 }
 
 export async function materializeAll(db: Database, infraDir: string): Promise<void> {
   const nodes = getTree(db);
-  for (const node of nodes) await materializeNode(db, infraDir, node.id);
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  for (const node of nodes) await materializeNode(db, infraDir, node.id, byId);
   await pruneDir(join(infraDir, "nodes"), new Set(nodes.map((n) => n.id)));
 }

@@ -144,3 +144,36 @@ test("questions: list, reply with a checked answer, cancel, audit without the an
   expect(audit.map((a) => a.action)).toEqual(["question_reply", "question_cancel"]);
   expect(audit[0]!.detail).not.toContain("nginx");
 });
+
+test("pins: an answer goes into the session instructions under a lowercase key and lists back", async () => {
+  const { db } = setup();
+  insert(db, "t1", "idle");
+  const entries = new Map<string, unknown>();
+  const client = {
+    session: {
+      instructions: {
+        entry: {
+          list: async () => [...entries].map(([key, value]) => ({ key, value })).concat({ key: "other", value: "x" }),
+          put: async (i: { key: string; value: unknown }) => void entries.set(i.key, i.value),
+          remove: async (i: { key: string }) => void entries.delete(i.key),
+        },
+      },
+    },
+  } as unknown as ReturnType<typeof makeClient>;
+  const app = new Hono();
+  app.use("*", async (c, next) => {
+    c.set("actor", "admin");
+    await next();
+  });
+  app.route("/", tasksRoutes({ db, client, infraDir: "/unused", now: () => NOW }));
+  const send = (method: string, path: string, body?: unknown) =>
+    app.request(path, { method, headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+
+  expect((await send("PUT", "/api/tasks/t1/pins/msg_AB.text.0", { text: "" })).status).toBe(400);
+  expect((await send("PUT", "/api/tasks/t1/pins/..%2Fx", { text: "a" })).status).toBe(400);
+  expect((await send("PUT", "/api/tasks/t1/pins/msg_AB.text.0", { text: "ответ" })).status).toBe(200);
+  expect([...entries.keys()]).toEqual(["pin-msg_ab.text.0"]);
+  expect(await (await app.request("/api/tasks/t1/pins")).json()).toEqual([{ messageId: "msg_AB.text.0", text: "ответ" }]);
+  expect((await send("DELETE", "/api/tasks/t1/pins/msg_AB.text.0")).status).toBe(200);
+  expect(entries.size).toBe(0);
+});

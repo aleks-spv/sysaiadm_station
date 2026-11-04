@@ -15,6 +15,7 @@ import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { serverMsg } from "@/i18n/server";
 import { cn, errorText, fieldClass } from "@/lib/utils";
 import {
   FILTERS,
@@ -207,7 +208,7 @@ function TunnelRow({
         </div>
       </div>
       {tunnel.lastError && (
-        <p className="ml-4 mt-0.5 text-xs text-destructive">{tunnel.lastError}</p>
+        <p className="ml-4 mt-0.5 text-xs text-destructive">{serverMsg(tunnel.lastError)}</p>
       )}
 
       {expanded && (
@@ -558,7 +559,7 @@ export default function WireguardPage() {
         })),
       );
       setAvailable(data.available);
-      setApiError(data.error ?? null);
+      setApiError(data.error ? serverMsg(data.error) : null);
     } catch (err: unknown) {
       setApiError(errorText(err));
     }
@@ -745,7 +746,7 @@ export default function WireguardPage() {
             <span className="font-medium shrink-0">{t("warnings.title")}</span>
             <ul className="list-disc pl-4 flex-1">
               {warnings.map((w, i) => (
-                <li key={i}>{w}</li>
+                <li key={i}>{serverMsg(w)}</li>
               ))}
             </ul>
             <Button

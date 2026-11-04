@@ -152,12 +152,17 @@ export const api = {
   taskForms: (id: string) => request<AgentForm[]>("GET", `/api/tasks/${id}/forms`),
   replyForm: (id: string, formID: string, answer: FormAnswer) => request<{ ok: true }>("POST", `/api/tasks/${id}/forms/${formID}/reply`, { answer }),
   cancelForm: (id: string, formID: string) => request<{ ok: true }>("POST", `/api/tasks/${id}/forms/${formID}/cancel`),
+  taskPins: (id: string) => request<{ messageId: string; text: string }[]>("GET", `/api/tasks/${id}/pins`),
+  pin: (id: string, messageId: string, text: string) => request<{ ok: true }>("PUT", `/api/tasks/${id}/pins/${encodeURIComponent(messageId)}`, { text }),
+  unpin: (id: string, messageId: string) => request<{ ok: true }>("DELETE", `/api/tasks/${id}/pins/${encodeURIComponent(messageId)}`),
   pendingPermissions: (id: string) => request<PendingPermission[]>("GET", `/api/tasks/${id}/permissions`),
   replyPermission: (id: string, requestID: string, decision: "once" | "always" | "reject") =>
     request<{ ok: true }>("POST", `/api/tasks/${id}/permissions/${requestID}`, { decision }),
 
   providers: () => request<{ data: ProviderInfo[] }>("GET", "/api/settings/providers"),
   setProviderKey: (id: string, key: string) => request<{ ok: true }>("POST", `/api/settings/providers/${id}/key`, { key }),
+  disabledProviders: () => request<string[]>("GET", "/api/settings/disabled-providers"),
+  setDisabledProviders: (providers: string[]) => request<string[]>("PUT", "/api/settings/disabled-providers", { providers }),
   models: () => request<{ data: ModelInfo[] }>("GET", "/api/settings/models"),
   agents: () => request<{ data: AgentInfo[] }>("GET", "/api/settings/agents"),
   integrations: () => request<{ data: IntegrationInfo[] }>("GET", "/api/settings/integrations"),
@@ -432,6 +437,16 @@ export function subscribeEvents(onEvent: (event: TaskEvent) => void): () => void
         return; // Ignore malformed frames; the next status change resyncs the view.
       }
       for (const fn of listeners) fn(event);
+    };
+    // A 401 closes the stream for good; check the session, then go to /login like request() does.
+    source.onerror = () => {
+      if (source?.readyState !== EventSource.CLOSED) return;
+      api
+        .authStatus()
+        .then((s) => {
+          if (!s.authed && window.location.pathname !== "/login") window.location.assign("/login");
+        })
+        .catch(() => {});
     };
   }
   return () => {

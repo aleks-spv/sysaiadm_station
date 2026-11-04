@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash, timingSafeEqual } from "node:crypto";
-import type { EffectiveNode, ExecVerdict, TaskStatus } from "@sysadm/shared";
+import type { EffectiveNode, ExecVerdict } from "@sysadm/shared";
 import { Hono, type Context } from "hono";
 import { trackExec } from "../exec-registry";
 import { audit, classify } from "../guard";
@@ -120,10 +120,6 @@ export function pinHostKeys(db: Database, hops: PlannedHop[], keys: string[]): n
     if (stored?.host_key !== keys[i]) return i;
   }
   return null;
-}
-
-function setTaskStatus(db: Database, taskId: string, status: TaskStatus): void {
-  db.run("UPDATE tasks SET status = ? WHERE id = ?", [status, taskId]);
 }
 
 export function createInternalApp(deps: InternalDeps): Hono {
@@ -247,11 +243,11 @@ export function createInternalApp(deps: InternalDeps): Hono {
       }
       const { eff, hops } = planned;
       const via = hops.slice(0, -1).map((h) => h.name);
-      setTaskStatus(db, task.id, "running");
+      // Task status is not touched here: the opencode session keeps running after the tool returns, and only its events (events.ts) know when it ends.
       const started = now();
 
       let out: ExecOutput;
-      const tracked = trackExec(task.id);
+      const tracked = trackExec(task.id, command);
       try {
         out = await exec({
           hops: hops.map((h) => h.hop),
@@ -268,16 +264,13 @@ export function createInternalApp(deps: InternalDeps): Hono {
         if (err instanceof HostKeyMismatch) {
           const hopName = hops[err.hop]?.name ?? "unknown";
           audit(db, { actor: ACTOR, action: "hostkey_mismatch", nodeId: hops[err.hop]?.nodeId, taskId: task.id, detail: { via } });
-          setTaskStatus(db, task.id, "error");
           return c.json({ error: "HOST_KEY_MISMATCH", node: hopName }, 409);
         }
         if (err instanceof SshHopError) {
           const hopName = hops[err.hop]?.name ?? "unknown";
-          setTaskStatus(db, task.id, "error");
           return c.json({ error: "SSH_HOP_ERROR", node: hopName }, 502);
         }
         const code = err instanceof Error ? err.message : "EXEC_FAILED";
-        setTaskStatus(db, task.id, "error");
         if (code === "EXEC_TIMEOUT") return c.json({ error: code }, 504);
         return c.json({ error: code === "ABORTED" ? code : "EXEC_FAILED" }, 408);
       } finally {
@@ -289,7 +282,6 @@ export function createInternalApp(deps: InternalDeps): Hono {
         // Another first connection pinned a different key; this output is not trusted.
         const hopName = hops[raced]?.name ?? "unknown";
         audit(db, { actor: ACTOR, action: "hostkey_race", nodeId: hops[raced]?.nodeId, taskId: task.id, detail: { via } });
-        setTaskStatus(db, task.id, "error");
         return c.json({ error: "HOST_KEY_MISMATCH", node: hopName }, 409);
       }
 
@@ -307,7 +299,6 @@ export function createInternalApp(deps: InternalDeps): Hono {
           toolCallId,
         },
       });
-      setTaskStatus(db, task.id, "idle");
       const view: ExecOutputView = { nodeId: task.node_id, taskId: task.id, command, shell: eff.shell, exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr };
       let shown: FilteredOutput = deps.filterOutput && body?.raw !== true ? await deps.filterOutput(view) : { stdout: out.stdout, stderr: out.stderr };
       if (deps.maskOutput) shown = await deps.maskOutput(view, shown);

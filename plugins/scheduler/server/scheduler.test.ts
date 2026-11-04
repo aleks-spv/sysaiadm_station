@@ -109,3 +109,18 @@ test("tick runs due jobs once, skips while the previous run works, skips stale r
   const paused = await s.app.request(`/jobs/${job.id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: false }) });
   expect(((await paused.json()) as { nextRunAt: number | null }).nextRunAt).toBeNull();
 });
+
+test("two manual runs at once start one task", async () => {
+  const now = Date.UTC(2026, 10, 2, 7, 0);
+  const { ctx, created } = fakeCtx();
+  const s = createScheduler(ctx, () => now);
+  const res = await s.app.request("/jobs", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nodeId: "n1", prompt: "проверка", schedule: { kind: "daily", time: "10:05", tz: MSK } }),
+  });
+  const job = (await res.json()) as { id: string };
+  const [a, b] = await Promise.all([s.app.request(`/jobs/${job.id}/run`, { method: "POST" }), s.app.request(`/jobs/${job.id}/run`, { method: "POST" })]);
+  expect([a.status, b.status].sort()).toEqual([200, 409]);
+  expect(created).toHaveLength(1);
+});

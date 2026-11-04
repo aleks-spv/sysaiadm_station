@@ -43,6 +43,19 @@ test("masks tokens, URL credentials, auth headers and shadow hashes", () => {
   expect(text).toBe(["export GH=***", "postgres://app:***@db:5432/app", "Authorization: Bearer ***", "root:***:19000:0:99999:7:::", "key ***"].join("\n"));
 });
 
+test("unquoted values stop at whitespace and quotes only", () => {
+  expect(maskSecrets("token=abc123,xyz").text).toBe("token=***");
+  expect(maskSecrets("password=abc;def").text).toBe("password=***");
+  expect(maskSecrets("DB_PASS=hunter2").text).toBe("DB_PASS=***");
+  expect(maskSecrets("MYSQL_PWD=x").text).toBe("MYSQL_PWD=***");
+  expect(maskSecrets("--password hunter2").text).toBe("--password ***");
+});
+
+test("PWD env and PasswordAuthentication are not masked", () => {
+  expect(maskSecrets("PWD=/root")).toEqual({ text: "PWD=/root", count: 0 });
+  expect(maskSecrets("PasswordAuthentication no")).toEqual({ text: "PasswordAuthentication no", count: 0 });
+});
+
 test("masked text is stable on a second pass", () => {
   const once = maskSecrets("token=abc password: \"x\"").text;
   expect(maskSecrets(once)).toEqual({ text: once, count: 0 });

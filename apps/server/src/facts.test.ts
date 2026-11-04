@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { factsMarkdown, parseLinuxFacts, parseWindowsFacts } from "./facts";
+import { factsMarkdown, osFromFacts, parseLinuxFacts, parseWindowsFacts } from "./facts";
 
 const LINUX = `
 ### hostname
@@ -114,4 +114,13 @@ test("Windows card from the PowerShell JSON, one-element arrays and vEthernet no
   expect(f.disks).toEqual([{ name: "Disk 0", model: "Microsoft Virtual Disk", sizeBytes: 136365211648, rotational: null }]);
   expect(f.filesystems).toEqual([{ mount: "C:", fstype: "NTFS", sizeBytes: 136000000000, usedBytes: 100000000000 }]);
   expect(f.interfaces).toEqual([{ name: "Ethernet", mac: "00:15:5d:01:02:03", up: true, addresses: ["10.1.0.10/24"] }]);
+});
+
+test("node OS follows the card; proxmox stays proxmox, unknown distros keep the admin's choice", () => {
+  const card = (os: string) => ({ os }) as Parameters<typeof osFromFacts>[0];
+  expect(osFromFacts(card("Microsoft Windows Server 2022 Standard 10.0.20348"), "ubuntu")).toBe("windows");
+  expect(osFromFacts(card("Ubuntu 24.04.1 LTS"), "other")).toBe("ubuntu");
+  expect(osFromFacts(card("Debian GNU/Linux 12 (bookworm)"), "ubuntu")).toBe("debian");
+  expect(osFromFacts(card("Debian GNU/Linux 12 (bookworm)"), "proxmox")).toBe("proxmox");
+  expect(osFromFacts(card("Rocky Linux 9.4"), "other")).toBe("other");
 });

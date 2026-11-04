@@ -111,7 +111,7 @@ export function createScheduler(ctx: PluginContext, now: () => number = Date.now
   };
 
   // One run of a job. A previous task that is still working blocks the run instead of stacking a second agent.
-  const run = async (row: Row, actor: string): Promise<{ taskId: string } | { error: string }> => {
+  const launch = async (row: Row, actor: string): Promise<{ taskId: string } | { error: string }> => {
     const prev = row.last_task_id ? ctx.tasks.get(row.last_task_id) : null;
     if (prev && (prev.status === "running" || prev.status === "waiting_permission")) {
       const error = "пропущено: предыдущий запуск ещё работает";
@@ -137,6 +137,22 @@ export function createScheduler(ctx: PluginContext, now: () => number = Date.now
       record(row.id, null, error);
       ctx.log("warn", `job ${row.id}: ${error}`);
       return { error };
+    }
+  };
+
+  // Jobs whose run is still starting: a double click must not read the same stale last_task_id twice.
+  const inFlight = new Set<string>();
+  const run = async (row: Row, actor: string): Promise<{ taskId: string } | { error: string }> => {
+    if (inFlight.has(row.id)) {
+      const error = "пропущено: предыдущий запуск ещё работает";
+      record(row.id, null, error);
+      return { error };
+    }
+    inFlight.add(row.id);
+    try {
+      return await launch(row, actor);
+    } finally {
+      inFlight.delete(row.id);
     }
   };
 

@@ -29,6 +29,7 @@ import { api, subscribeEvents } from "@/api";
 import type { NodeAction } from "@/plugins";
 import { useEnabledPlugins } from "@/plugins/useEnabledPlugins";
 import { KIND_LABEL } from "@/components/AddNodeDialog";
+import { OS_ICON } from "@/components/OsIcons";
 import RenameDialog from "@/components/RenameDialog";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -53,7 +54,7 @@ const KIND_COLOR: Record<NodeKind, string> = {
   hypervisor: "text-violet-600 dark:text-violet-400",
   vm: "text-emerald-600 dark:text-emerald-400",
 };
-const TREE_ERRORS = ["IS_JUMP_HOST", "TASK_RUNNING", "MOVE_CYCLE"] as const;
+const TREE_ERRORS = ["IS_JUMP_HOST", "TASK_RUNNING", "MOVE_CYCLE", "PROTECTED"] as const;
 const DRAG_TYPE = "application/x-sysadm-node";
 const TASKS_SHOWN = 8;
 
@@ -132,7 +133,13 @@ export default function Sidebar({ width, onAdd, onImport, onExport, onSettings, 
   const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState(currentTheme);
   // Nodes whose task list is folded; remembered so a long list stays folded across reloads.
-  const [folded, setFolded] = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem("sysadm.foldedTasks") ?? "[]") as string[]));
+  const [folded, setFolded] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem("sysadm.foldedTasks") ?? "[]") as string[]);
+    } catch {
+      return new Set();
+    }
+  });
   const [showAll, setShowAll] = useState(false);
   useEffect(() => localStorage.setItem("sysadm.foldedTasks", JSON.stringify([...folded])), [folded]);
 
@@ -313,7 +320,7 @@ export default function Sidebar({ width, onAdd, onImport, onExport, onSettings, 
 
       <ul className="flex-1 overflow-y-auto px-2 pb-2 text-sm">
         {rows.map(({ node, depth }) => {
-          const Icon = KIND_ICON[node.kind];
+          const Icon = (node.kind === "vm" && OS_ICON[node.os]) || KIND_ICON[node.kind];
           const hasKids = parents.has(node.id);
           const nodeTasks = tasksByNode.get(node.id) ?? [];
           const running = nodeTasks.some((t) => t.status === "running");

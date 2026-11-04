@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRtkInstaller, findBinary, latestRelease } from "./install";
@@ -50,6 +50,15 @@ test("installer finds an update, installs it and switches the binary", async () 
   });
   expect(await installer.info()).toMatchObject({ mode: "managed", current: "1.1.0", latest: "1.2.0", updateAvailable: true });
   expect(await installer.upgrade()).toMatchObject({ current: "1.2.0", path: join(dir, "rtk"), updateAvailable: false, error: null });
+});
+
+test("a stale .install lock from a crash does not block the upgrade", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rtk-bin-"));
+  mkdirSync(join(dir, ".install"));
+  const installer = createRtkInstaller({ dir, external: false, current: () => null, onInstalled: () => {}, fetchFn: await fakeRelease("1.2.0"), asset: ASSET });
+  expect((await installer.upgrade()).error).toBeNull();
+  expect(existsSync(join(dir, "rtk"))).toBe(true);
+  expect(existsSync(join(dir, ".install"))).toBe(false);
 });
 
 test("a bad checksum leaves the current binary alone", async () => {

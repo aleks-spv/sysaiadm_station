@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import * as OTPAuth from "otpauth";
 import { openDb } from "./db";
-import { authRoutes, createAuth, matchRouteScope, requireAuth } from "./auth";
+import { authRoutes, clientIp, createAuth, matchRouteScope, requireAuth } from "./auth";
 import { createToken, revokeToken } from "./tokens";
 
 const PASSWORD = "correct-horse-battery";
@@ -74,6 +74,14 @@ describe("auth", () => {
     expect(badCode.status).toBe(401);
     expect(badPass.status).toBe(401);
     expect(await badCode.text()).toBe(await badPass.text());
+  });
+
+  test("a TOTP code is accepted only once", async () => {
+    const { app } = setupApp();
+    const totp = await setupAndGetSecret(app);
+    const code = totp.generate();
+    expect((await post(app, "/api/auth/login", { password: PASSWORD, code })).status).toBe(200);
+    expect((await post(app, "/api/auth/login", { password: PASSWORD, code })).status).toBe(401);
   });
 
   test("sixth attempt inside 15 minutes gets 429", async () => {
@@ -268,5 +276,23 @@ describe("bearer tokens", () => {
   test("route templates are anchored", () => {
     expect(matchRouteScope("GET", "/api/nodes/a")).toBe("read");
     expect(matchRouteScope("GET", "/api/nodes/a/b")).toBeNull();
+  });
+});
+
+describe("clientIp", () => {
+  const ipOf = async (peer: string, xff?: string) => {
+    const app = new Hono().get("/", (c) => c.text(clientIp(c)));
+    const server = { requestIP: () => ({ address: peer, family: "IPv4", port: 1 }) };
+    const res = await app.fetch(new Request("http://x/", { headers: xff ? { "x-forwarded-for": xff } : {} }), server);
+    return res.text();
+  };
+
+  test("ignores X-Forwarded-For from a public peer", async () => {
+    expect(await ipOf("203.0.113.9", "1.2.3.4")).toBe("203.0.113.9");
+  });
+
+  test("takes the entry a private proxy appended, not the client's", async () => {
+    expect(await ipOf("172.19.0.5", "6.6.6.6, 198.51.100.7")).toBe("198.51.100.7");
+    expect(await ipOf("::ffff:127.0.0.1")).toBe("::ffff:127.0.0.1");
   });
 });

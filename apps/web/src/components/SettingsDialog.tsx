@@ -17,7 +17,6 @@ import WebSearchSection from "@/components/settings/WebSearchSection";
 import TaskArchiveSection from "@/components/settings/TaskArchiveSection";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { t } from "@/i18n/settings";
-import { useEnabledPlugins } from "@/plugins/useEnabledPlugins";
 import { cn } from "@/lib/utils";
 
 export type SettingsTarget = { section: string; parent?: string | null } | null;
@@ -65,11 +64,8 @@ const GROUPS: Array<{ title: string; sections: Section[] }> = [
 
 // Gear popup: section list on the left, the section on the right.
 export default function SettingsDialog({ target, onSection, onClose }: { target: SettingsTarget; onSection: (id: string) => void; onClose: () => void }) {
-  // Enabled plugins whose page belongs in settings (WireGuard) become sections of their own group.
-  const pluginSections: Section[] = useEnabledPlugins()
-    .filter((p) => p.Page && p.placement === "settings")
-    .map((p) => ({ id: `plugin:${p.id}`, title: p.title, icon: p.icon, Body: p.Page! }));
-  const groups = pluginSections.length ? [...GROUPS, { title: t("dialog.groupPlugins"), sections: pluginSections }] : GROUPS;
+  // Plugin pages open from their cards in the Plugins section.
+  const groups = GROUPS;
   const all = groups.flatMap((g) => g.sections);
   const current = all.find((s) => s.id === target?.section) ?? all[0]!;
   const { Body } = current;

@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { Hono } from "hono";
 import { audit } from "../guard";
 import type { OpenCodeClient } from "../opencode";
-import { getOverlay, LOCKED_KEYS, saveOverlay, validateOverlay, type Overlay } from "../opencode-config";
+import { DISABLED_PROVIDERS_KEY, getOverlay, LOCKED_KEYS, saveOverlay, validateOverlay, type Overlay } from "../opencode-config";
 import { getSetting, setSetting } from "../settings";
 
 export interface OpencodeSettingsDeps {
@@ -14,6 +14,7 @@ export interface OpencodeSettingsDeps {
 
 const MODEL_REF = /^[^\s/]{1,128}\/\S{1,256}$/;
 const MAX_HIDDEN = 5000;
+const PROVIDER_ID = /^[\w.-]{1,64}$/;
 
 export function opencodeSettingsRoutes(deps: OpencodeSettingsDeps): Hono {
   const { db, client } = deps;
@@ -46,6 +47,22 @@ export function opencodeSettingsRoutes(deps: OpencodeSettingsDeps): Hono {
     const models = [...new Set(list as string[])];
     setSetting(db, "hidden_models", models);
     return c.json(models);
+  });
+
+  app.get("/api/settings/disabled-providers", (c) => c.json(getSetting<string[]>(db, DISABLED_PROVIDERS_KEY) ?? []));
+
+  // Written into opencode.json as provider.use deny policies; no wildcards, one switch turns off one provider.
+  app.put("/api/settings/disabled-providers", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const list: unknown = body?.providers;
+    if (!Array.isArray(list) || list.length > 500 || !list.every((p) => typeof p === "string" && PROVIDER_ID.test(p))) {
+      return c.json({ error: "providers должен быть списком id провайдеров" }, 400);
+    }
+    const providers = [...new Set(list as string[])];
+    setSetting(db, DISABLED_PROVIDERS_KEY, providers);
+    deps.apply(getOverlay(db));
+    audit(db, { actor: c.get("actor"), action: "providers_disabled", detail: { providers } });
+    return c.json(providers);
   });
 
   return app;

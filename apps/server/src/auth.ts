@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import { Hono, type Context } from "hono";
+import { getConnInfo } from "hono/bun";
 import { getCookie, setCookie } from "hono/cookie";
 import { createMiddleware } from "hono/factory";
 import * as OTPAuth from "otpauth";
@@ -18,6 +19,38 @@ const COOKIE = "sid";
 export const isHttps = (c: Context) =>
   (c.req.header("x-forwarded-proto")?.split(",")[0].trim() ?? new URL(c.req.url).protocol.replace(":", "")) === "https";
 
+const PRIVATE_IP = /^(::ffff:)?(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)|^(::1$|f[cd])/i;
+
+// Client address for rate limits. X-Forwarded-For is client-controlled, so it counts only when the
+// peer is a proxy on a private network, and then only its last entry (the one the proxy appended).
+export const clientIp = (c: Context): string => {
+  let peer: string | undefined;
+  try {
+    peer = getConnInfo(c).remote.address;
+  } catch {
+    // no Bun server in env (app.request in tests)
+  }
+  const forwarded = c.req.header("x-forwarded-for")?.split(",").at(-1)?.trim();
+  if (!peer) return forwarded || "unknown";
+  return PRIVATE_IP.test(peer) && forwarded ? forwarded : peer;
+};
+
+// Failure timestamps per IP inside the window; empty keys are dropped so the map cannot only grow.
+export function failLog(window: number) {
+  const map = new Map<string, number[]>();
+  return {
+    recent(ip: string, now: number): number[] {
+      if (map.size > 1000) for (const [k, v] of map) if (!v.some((t) => t > now - window)) map.delete(k);
+      const list = (map.get(ip) ?? []).filter((t) => t > now - window);
+      if (list.length) map.set(ip, list);
+      else map.delete(ip);
+      return list;
+    },
+    add: (ip: string, now: number) => map.set(ip, [...(map.get(ip) ?? []), now]),
+    clear: (ip: string) => map.delete(ip),
+  };
+}
+
 export class AuthError extends Error {
   constructor(
     message: string,
@@ -30,6 +63,11 @@ export class AuthError extends Error {
 // Session tokens are stored hashed: a DB read does not yield a usable cookie.
 const hashToken = (t: string) => createHash("sha256").update(t).digest("hex");
 
+// For long-lived connections (terminal WebSocket): the cookie is checked once at upgrade, so logout and
+// expiry must be re-checked while the socket lives.
+export const sessionAlive = (db: Database, token: string | undefined, now = Date.now()): boolean =>
+  !!token && !!db.query("SELECT 1 FROM auth_sessions WHERE id = ? AND expires_at > ?").get(hashToken(token), now);
+
 export interface AuthDeps {
   db: Database;
   masterKey: Buffer;
@@ -38,14 +76,9 @@ export interface AuthDeps {
 }
 
 export function createAuth({ db, masterKey, now = Date.now, dev = false }: AuthDeps) {
-  const fails = new Map<string, number[]>();
-
-  const recentFails = (ip: string): number[] => {
-    const cutoff = now() - RATE_WINDOW_MS;
-    const list = (fails.get(ip) ?? []).filter((t) => t > cutoff);
-    fails.set(ip, list);
-    return list;
-  };
+  const fails = failLog(RATE_WINDOW_MS);
+  // shortcut: in memory, a restart forgets it; fine for one admin and one process.
+  let lastStep = -1;
 
   const isSetup = (): boolean => !!db.query("SELECT 1 FROM admin WHERE id = 1").get();
 
@@ -79,7 +112,9 @@ export function createAuth({ db, masterKey, now = Date.now, dev = false }: AuthD
   }
 
   async function login(password: string, code: string, ip: string): Promise<string> {
-    if (recentFails(ip).length >= RATE_MAX_FAILS) throw new AuthError("too many attempts", 429);
+    if (fails.recent(ip, now()).length >= RATE_MAX_FAILS) throw new AuthError("too many attempts", 429);
+    // Counted as a failure before the slow argon2 check, so parallel requests cannot all pass the limit.
+    fails.add(ip, now());
 
     const row = db
       .query<{ password_hash: string; totp_secret_enc: Buffer; totp_iv: Buffer; totp_tag: Buffer }, []>(
@@ -89,20 +124,25 @@ export function createAuth({ db, masterKey, now = Date.now, dev = false }: AuthD
 
     // Same generic error for wrong password and wrong code: the caller learns nothing about which one failed.
     let ok = false;
+    let step = 0;
     if (row) {
       const pwOk = await Bun.password.verify(password, row.password_hash);
       const secret = open(masterKey, { ciphertext: row.totp_secret_enc, iv: row.totp_iv, tag: row.totp_tag }, "totp").toString();
+      const t = Date.now();
+      const delta = totpFor(secret).validate({ token: code, timestamp: t, window: 1 });
+      step = Math.floor(t / 30_000) + (delta ?? 0);
+      // A code is accepted once: a step at or before the last used one is a replay.
       // shortcut: dev не проверяет код TOTP; снять вместе с переходом стенда на HTTPS.
-      const codeOk = dev || totpFor(secret).validate({ token: code, window: 1 }) !== null;
+      const codeOk = dev || (delta !== null && step > lastStep);
       ok = pwOk && codeOk;
     }
     if (!ok) {
-      fails.set(ip, [...recentFails(ip), now()]);
       audit(db, { actor: ip, action: "login_fail" });
       throw new AuthError("invalid credentials", 401);
     }
 
-    fails.delete(ip);
+    fails.clear(ip);
+    if (!dev) lastStep = step;
     const token = randomBytes(32).toString("base64url");
     db.run("INSERT INTO auth_sessions (id, expires_at) VALUES (?, ?)", [hashToken(token), now() + SESSION_TTL_MS]);
     audit(db, { actor: "admin", action: "login_ok", detail: { ip } });
@@ -166,6 +206,9 @@ export const ROUTE_SCOPES: RouteScope[] = [
   { method: "POST", pattern: "/api/tasks/:id/unarchive", scope: "tasks" },
   { method: "POST", pattern: "/api/tasks/:id/permissions/:requestID", scope: "approve" },
   { method: "GET", pattern: "/api/tasks/:id/forms", scope: "read" },
+  { method: "GET", pattern: "/api/tasks/:id/pins", scope: "read" },
+  { method: "PUT", pattern: "/api/tasks/:id/pins/:messageId", scope: "tasks" },
+  { method: "DELETE", pattern: "/api/tasks/:id/pins/:messageId", scope: "tasks" },
   { method: "POST", pattern: "/api/tasks/:id/forms/:formID/reply", scope: "approve" },
   { method: "POST", pattern: "/api/tasks/:id/forms/:formID/cancel", scope: "approve" },
   { method: "GET", pattern: "/api/system/logs", scope: "logs" },
@@ -202,6 +245,8 @@ export const ROUTE_SCOPES: RouteScope[] = [
   { method: "POST", pattern: "/api/skills/github/install", scope: "admin" },
   { method: "GET", pattern: "/api/settings/hidden-models", scope: "read" },
   { method: "PUT", pattern: "/api/settings/hidden-models", scope: "admin" },
+  { method: "GET", pattern: "/api/settings/disabled-providers", scope: "read" },
+  { method: "PUT", pattern: "/api/settings/disabled-providers", scope: "admin" },
   { method: "GET", pattern: "/api/settings/opencode-plugins", scope: "read" },
   // The overlay may hold provider settings typed by the admin, so reading it is admin-only too.
   { method: "GET", pattern: "/api/settings/opencode-config", scope: "admin" },
@@ -232,19 +277,17 @@ declare module "hono" {
 
 // A Bearer header bypasses the cookie entirely. Cookie requests keep the session check and the CSRF header.
 export const requireAuth = (auth: Auth, db: Database) => {
-  const bearerFails = new Map<string, number[]>();
+  const bearerFails = failLog(RATE_WINDOW_MS);
   return createMiddleware(async (c, next) => {
     const header = c.req.header("authorization");
     if (header !== undefined) {
-      const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+      const ip = clientIp(c);
       const now = Date.now();
-      const recent = (bearerFails.get(ip) ?? []).filter((t) => t > now - RATE_WINDOW_MS);
-      bearerFails.set(ip, recent);
-      if (recent.length >= BEARER_MAX_FAILS) return c.json({ error: "too many attempts" }, 429);
+      if (bearerFails.recent(ip, now).length >= BEARER_MAX_FAILS) return c.json({ error: "too many attempts" }, 429);
       const raw = header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
       const token = raw ? verifyToken(db, raw, now) : null;
       if (!token) {
-        bearerFails.set(ip, [...recent, now]);
+        bearerFails.add(ip, now);
         return c.json({ error: "unauthorized" }, 401);
       }
       // Tokens and plugins are cookie-only: plugin routes are not in the scope map.
@@ -285,7 +328,7 @@ export function authRoutes(auth: Auth) {
 
   app.post("/login", async (c) => {
     const body = await c.req.json<{ password?: string; code?: string }>().catch(() => ({}) as { password?: string; code?: string });
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+    const ip = clientIp(c);
     try {
       const token = await auth.login(body.password ?? "", body.code ?? "", ip);
       // Browsers drop Secure cookies received over plain HTTP, so the flag follows the request scheme.

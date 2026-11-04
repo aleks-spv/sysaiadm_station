@@ -3,11 +3,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "./db";
-import { audit, classify } from "./guard";
+import { audit, classify, pruneOld } from "./guard";
 
 const cases: Array<[string, "deny" | "read" | "dangerous" | "normal"]> = [
   ["rm -rf /", "deny"],
   ["rm -rf /tmp/x", "normal"],
+  ["rm -rf /*", "deny"],
+  ["rm -r -f /", "deny"],
+  ["sudo rm -fR '/'", "deny"],
+  ["rm -rf --no-preserve-root /", "deny"],
+  ["rm --recursive --force /", "deny"],
+  ["rm -rf ./build /tmp/x", "normal"],
+  ["rm /tmp/x; ls /", "normal"],
   ["mkfs.ext4 /dev/sdb1", "deny"],
   ["dd if=/dev/zero of=/dev/sda", "deny"],
   ["echo hi > /dev/sda", "deny"],
@@ -56,4 +63,14 @@ describe("audit", () => {
     db.close();
     rmSync(dir, { recursive: true, force: true });
   });
+});
+
+test("pruneOld drops audit rows older than a year and expired sessions only", () => {
+  const db = openDb(":memory:");
+  const now = 400 * 24 * 60 * 60 * 1000;
+  db.run("INSERT INTO audit (ts, actor, action) VALUES (?, 'a', 'old'), (?, 'a', 'new')", [now - 366 * 24 * 60 * 60 * 1000, now - 1000]);
+  db.run("INSERT INTO auth_sessions (id, expires_at) VALUES ('gone', ?), ('live', ?)", [now - 1, now + 1000]);
+  pruneOld(db, now);
+  expect(db.query("SELECT action FROM audit").all()).toEqual([{ action: "new" }]);
+  expect(db.query("SELECT id FROM auth_sessions").all()).toEqual([{ id: "live" }]);
 });

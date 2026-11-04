@@ -96,6 +96,19 @@ test("Stop aborts the running remote command of that task", async () => {
   expect(abortTaskExecs("task-1")).toBe(0);
 });
 
+// The session keeps running after a tool returns; a status written here hid Stop while the model looped.
+test("exec leaves the task status to session events, on success and on failure", async () => {
+  db.run("UPDATE tasks SET status = 'running' WHERE id = 'task-1'");
+  const status = () => db.query<{ status: string }, []>("SELECT status FROM tasks WHERE id = 'task-1'").get()?.status;
+  expect((await exec("uptime")).status).toBe(200);
+  expect(status()).toBe("running");
+  execImpl = async () => {
+    throw new Error("EXEC_FAILED");
+  };
+  expect((await exec("uptime")).status).toBe(408);
+  expect(status()).toBe("running");
+});
+
 test("requests without the internal token get 401", async () => {
   const res = await post("/internal/check", { sessionID: "ses-1", command: "uptime" }, "wrong");
   expect(res.status).toBe(401);

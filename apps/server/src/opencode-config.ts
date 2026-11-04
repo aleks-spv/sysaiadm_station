@@ -243,10 +243,15 @@ export function saveOverlay(db: Database, overlay: Overlay): void {
 // on start; pinned because its V2 support is new. The base permissions allow its `compress` tool.
 export const DCP_PLUGIN = "@tarquinen/opencode-dcp@3.2.0";
 
-export function buildOpencodeConfig(base: Record<string, unknown>, pluginPath: string, overlay: Overlay): Record<string, unknown> {
+// Providers the admin switched off; V2 replaced disabled_providers with provider.use deny policies.
+export const DISABLED_PROVIDERS_KEY = "disabled_providers";
+
+export function buildOpencodeConfig(base: Record<string, unknown>, pluginPath: string, overlay: Overlay, disabledProviders: string[] = []): Record<string, unknown> {
   const extra = (Array.isArray(overlay.plugins) ? overlay.plugins : []).filter((p) => !(typeof p === "string" && p.startsWith("@tarquinen/opencode-dcp")));
   const locked = Object.fromEntries(LOCKED_KEYS.filter((k) => k in base).map((k) => [k, base[k]]));
-  return { ...base, ...overlay, plugins: [{ package: pluginPath }, DCP_PLUGIN, ...extra], ...locked };
+  const deny = disabledProviders.map((id) => ({ action: "provider.use", resource: id, effect: "deny" }));
+  const policies = [...(Array.isArray(base.policies) ? base.policies : []), ...deny];
+  return { ...base, ...overlay, plugins: [{ package: pluginPath }, DCP_PLUGIN, ...extra], ...locked, ...(policies.length ? { policies } : {}) };
 }
 
 // DCP reads <XDG_CONFIG_HOME>/opencode/dcp.jsonc. Its default posts a prune report into the chat; the admin

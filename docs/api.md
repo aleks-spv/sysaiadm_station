@@ -59,6 +59,8 @@
 | POST | `/api/import/apply` | admin |
 | GET | `/api/settings/providers` | read |
 | POST | `/api/settings/providers/:id/key` | admin |
+| GET | `/api/settings/disabled-providers` | read |
+| PUT | `/api/settings/disabled-providers` | admin |
 | GET | `/api/settings/models` | read |
 | GET | `/api/system/health` | read |
 | GET | `/api/system/logs` | logs |
@@ -66,6 +68,9 @@
 | GET | `/api/system/opencode/version` | read |
 | POST | `/api/system/opencode/upgrade` | admin |
 | GET | `/api/tasks/:id/forms` | read |
+| GET | `/api/tasks/:id/pins` | read |
+| PUT | `/api/tasks/:id/pins/:messageId` | tasks |
+| DELETE | `/api/tasks/:id/pins/:messageId` | tasks |
 | POST | `/api/tasks/:id/forms/:formID/reply` | approve |
 | POST | `/api/tasks/:id/forms/:formID/cancel` | approve |
 | GET | `/api/settings/websearch` | read |

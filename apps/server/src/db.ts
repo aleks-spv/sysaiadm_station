@@ -113,6 +113,10 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE credentials ADD COLUMN user TEXT;
   `,
+  // The node's history card reads its latest audit rows; without this it scans the whole log.
+  `
+  CREATE INDEX IF NOT EXISTS audit_node ON audit(node_id, id);
+  `,
 ];
 
 export function openDb(path: string): Database {

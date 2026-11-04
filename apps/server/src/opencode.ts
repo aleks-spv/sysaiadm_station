@@ -123,6 +123,26 @@ export async function replyForm(client: OpenCodeClient, sessionID: string, formI
   return client.session.form.reply({ sessionID, formID, answer });
 }
 
+// Pinned messages are session instruction entries: opencode adds them to the model's instructions on every turn.
+// Keys must be lowercase, so the entry keeps the original message id in its value.
+const pinKey = (messageID: string) => `pin-${messageID.toLowerCase()}`;
+
+export async function listPins(client: OpenCodeClient, sessionID: string) {
+  const entries = await client.session.instructions.entry.list({ sessionID });
+  return entries.flatMap((e) => {
+    const v = e.value as { messageId?: unknown; text?: unknown } | null;
+    return e.key.startsWith("pin-") && typeof v?.messageId === "string" && typeof v.text === "string" ? [{ messageId: v.messageId, text: v.text }] : [];
+  });
+}
+
+export async function pin(client: OpenCodeClient, sessionID: string, messageId: string, text: string) {
+  return client.session.instructions.entry.put({ sessionID, key: pinKey(messageId), value: { pinned_message: true, messageId, text } });
+}
+
+export async function unpin(client: OpenCodeClient, sessionID: string, messageId: string) {
+  return client.session.instructions.entry.remove({ sessionID, key: pinKey(messageId) });
+}
+
 export async function cancelForm(client: OpenCodeClient, sessionID: string, formID: string, message: string) {
   return client.session.form.cancel({ sessionID, formID, message });
 }

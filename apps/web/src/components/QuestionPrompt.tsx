@@ -3,7 +3,7 @@ import { ExternalLink, MessageCircleQuestion } from "lucide-react";
 import type { AgentForm, FormAnswer, FormField } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { cn, fieldClass } from "@/lib/utils";
+import { cn, fieldClass, safeHref } from "@/lib/utils";
 import { t } from "@/i18n/app";
 
 type Value = string | number | boolean | string[];
@@ -88,11 +88,14 @@ export default function QuestionPrompt({ form, onReply, onCancel }: { form: Agen
             </p>
           )}
           {f.description && <p className="text-xs text-muted-foreground whitespace-pre-wrap">{f.description}</p>}
-          {f.type === "external" && (
-            <a href={f.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline">
-              <ExternalLink className="size-3.5" /> {f.title ?? f.url}
-            </a>
-          )}
+          {f.type === "external" &&
+            (safeHref(f.url) ? (
+              <a href={safeHref(f.url)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline">
+                <ExternalLink className="size-3.5" /> {f.title ?? f.url}
+              </a>
+            ) : (
+              <span className="text-xs break-all">{f.title ?? f.url}</span>
+            ))}
           {f.type === "string" && f.options?.length ? (
             <div className="flex flex-col gap-1">
               {f.options.map((o) => (

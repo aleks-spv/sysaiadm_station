@@ -142,6 +142,8 @@ export function createRtkInstaller(opts: {
       try {
         latest = await latestRelease(fetchFn, opts.asset ?? assetName());
         checkedAt = Date.now();
+        // A crash mid-install leaves the lock dir behind; busy already serializes in-process installs.
+        rmSync(join(opts.dir, ".install"), { recursive: true, force: true });
         opts.onInstalled(await installRelease(opts.dir, latest, fetchFn));
         error = null;
       } catch (e) {

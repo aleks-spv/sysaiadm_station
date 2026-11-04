@@ -20,6 +20,11 @@ test("written config keeps the sysadm plugin first and the base security keys", 
   expect(existsSync(join(infra, "opencode.json.tmp"))).toBe(false);
 });
 
+test("disabled providers become provider.use deny policies after the base ones", () => {
+  const cfg = buildOpencodeConfig(base, "/app/plugin", { policies: [] }, ["openai"]);
+  expect(cfg.policies).toEqual([...base.policies, { action: "provider.use", resource: "openai", effect: "deny" }]);
+});
+
 test("overlay cannot touch permissions, policies or agent permissions", () => {
   expect(validateOverlay(DEFAULT_OVERLAY)).toEqual([]);
   expect(validateOverlay([])).toHaveLength(1);

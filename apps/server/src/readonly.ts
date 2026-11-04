@@ -17,24 +17,34 @@ const all = (...checks: Check[]): Check => (a, seg) => checks.every((c) => c(a, 
 
 const LINUX: Record<string, Check> = Object.fromEntries([
   ...[
-    "cat", "zcat", "head", "tail", "tac", "nl", "ls", "stat", "file", "wc", "du", "df", "free", "uptime", "uname",
-    "whoami", "id", "groups", "w", "who", "last", "lastlog", "printenv", "ps", "pgrep", "pidof", "lsof", "ss",
+    "cat", "zcat", "head", "tail", "tac", "nl", "ls", "stat", "wc", "du", "df", "free", "uptime", "uname",
+    "whoami", "id", "groups", "w", "who", "last", "printenv", "ps", "pgrep", "pidof", "lsof",
     "netstat", "ping", "traceroute", "tracepath", "dig", "nslookup", "host", "getent", "lsblk", "blkid", "lscpu",
-    "lspci", "lsusb", "lsmod", "dmidecode", "sensors", "findmnt", "vmstat", "iostat", "mpstat", "nproc", "getconf",
+    "lspci", "lsusb", "lsmod", "findmnt", "vmstat", "iostat", "mpstat", "nproc", "getconf",
     "cut", "tr", "column", "jq", "md5sum", "sha1sum", "sha256sum", "diff", "cmp", "comm", "which", "whereis",
     "readlink", "realpath", "basename", "dirname", "echo", "printf", "true", "test", "pwd", "cd", "grep", "egrep",
-    "fgrep", "zgrep", "rg", "arp", "pveversion", "dpkg-query", "lsb_release", "systemd-detect-virt",
+    "fgrep", "zgrep", "pveversion", "dpkg-query", "lsb_release", "systemd-detect-virt",
   ].map((name) => [name, ANY] as const),
+  // GNU long options accept any unambiguous prefix (--comp = --compress-program), so the
+  // patterns below match the shortest unique prefix, not the full name.
+  ["file", without(/\s-\w*C|--comp/)],
+  ["ss", without(/\s-\w*K|--k/)],
+  ["arp", without(/\s-\w*[dsf]|--(del|s|f)/)],
+  ["lastlog", without(/\s-\w*[CS]|--(c|s)/)],
+  ["sensors", without(/\s-\w*s|--s/)],
+  ["dmidecode", without(/--dump-/)],
+  ["rg", without(/\s--pre\b/)],
   ["hostname", only("-f", "-I", "-i", "-s", "-d", "-A", "--fqdn", "--short")],
-  ["date", without(/\s(-s|--set)\b/)],
+  ["date", without(/\s-[a-zA-Z]{0,2}s\b|--s/)],
   ["top", (_, seg) => /\s-\w*b/.test(seg)],
-  ["sort", without(/\s-[a-zA-Z]*o|--output/)],
+  ["sort", without(/\s-[a-zA-Z]*o|--o|--comp/)],
   ["uniq", (a) => a.filter((x) => !flag(x)).length <= 1],
   ["find", without(/\s-(delete|exec|execdir|ok|okdir|fprint\w*|fls)\b/)],
-  ["sed", without(/\s-[a-zA-Z]*i|--in-place|(?<![-\w])[we]\s/)],
+  // e/w/W run or write: as a command after an address (1e, $w, /re/w) or as an s/// flag (s/a/b/e, s/a/b/gw f).
+  ["sed", without(/\s-[a-zA-Z]*[if]|--(i|f)|(?<![\w.\/-])[\d$!,~]*[ewW](?![\w.])|\/[gpiImM\d]*[ewW](?![\w.])/)],
   ["awk", without(/system|getline|\|\s*"|print[^;}]*>/)],
-  ["dmesg", without(/\s-[a-zA-Z]*[cCDEn]|--(clear|read-clear|console)/)],
-  ["journalctl", without(/--(vacuum|rotate|flush|sync|relinquish|setup-keys|update-catalog)/)],
+  ["dmesg", without(/\s-[a-zA-Z]*[cCDEn]|--(cle|rea|con)/)],
+  ["journalctl", without(/--(vac|rot|fl|syn|rel|set|upd)/)],
   ["systemctl", sub(["status", "is-active", "is-enabled", "is-failed", "list-units", "list-unit-files", "list-timers", "list-sockets", "list-dependencies", "show", "cat"], true)],
   ["timedatectl", sub(["status", "show", "list-timezones", "timesync-status", "show-timesync"], true)],
   ["hostnamectl", sub(["status"], true)],
@@ -42,7 +52,14 @@ const LINUX: Record<string, Check> = Object.fromEntries([
   ["loginctl", sub(["list-sessions", "list-users", "session-status", "user-status", "show-session", "show-user"], true)],
   ["networkctl", sub(["list", "status", "lldp"], true)],
   ["resolvectl", sub(["status", "query", "statistics"], true)],
-  ["ip", without(/\b(add|del|delete|set|flush|change|replace|append|exec|save|restore|monitor)\b/)],
+  // ip takes any prefix of an object or verb (`ip a a` = addr add, `ip l s` = link set), so only spelled-out
+  // read verbs pass; -b/-batch runs commands from a file.
+  ["ip", (a, seg) => {
+    if (/\s-(b|ba|bat|batc|batch|force)\b/.test(seg)) return false;
+    const [object, verb] = a.filter((x) => !flag(x));
+    if (object && "monitor".startsWith(object) && object.length > 1) return false;
+    return verb === undefined || ["show", "list", "lst", "ls", "get"].includes(verb);
+  }],
   ["mount", only("-l")],
   ["swapon", only("--show", "-s", "--summary")],
   ["sysctl", without(/\s-\w*[wp]|--(write|load|system)|=/)],
@@ -58,6 +75,7 @@ const LINUX: Record<string, Check> = Object.fromEntries([
   ["iptables-save", without(/\s(-f|--file)/)],
   ["nft", sub(["list"])],
   ["ufw", sub(["status"])],
+  ["sysadm-oc", sub(["help", "models", "providers", "version", "plugins", "config"])],
   ["wg", sub(["show", "showconf"], true)],
   ["openssl", all(sub(["x509", "s_client", "version", "verify", "crl", "ciphers"]), without(/\s-out\b/))],
   ["certbot", sub(["certificates"])],
@@ -166,8 +184,9 @@ export function isReadOnly(command: string): boolean {
   if (!parsed || parsed.segments.length === 0) return false;
   if (!parsed.redirects.every((t) => t === "/dev/null" || t === "&1" || t === "&2" || /^\$null$/i.test(t))) return false;
   return parsed.segments.every((seg) => {
-    // Leading VAR=value assignments and `sudo -n` do not change what runs.
-    const s = seg.replace(/^(\w+=\S*\s+)+/, "").replace(/^sudo(\s+-[nEH]+)*\s+/, "");
+    // Leading locale/time zone assignments and `sudo -n` do not change what runs; other variables can
+    // (LD_PRELOAD=/tmp/x.so ls loads code), so they fall through to asking.
+    const s = seg.replace(/^((LC_\w+|LANG|LANGUAGE|TZ|COLUMNS|TERM)=\S*\s+)+/, "").replace(/^sudo(\s+-[nEH]+)*\s+/, "");
     const [name = "", ...args] = s.split(/\s+/);
     const check = LINUX[name];
     if (check) return check(args, ` ${s}`);

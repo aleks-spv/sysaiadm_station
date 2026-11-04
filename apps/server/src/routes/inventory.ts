@@ -56,7 +56,7 @@ function optAddress(value: unknown): string | null | undefined {
 function failure(c: Context, err: unknown) {
   const code = err instanceof Error ? err.message : "";
   if (code === "NOT_FOUND") return c.json({ error: code }, 404);
-  if (code === "HAS_CHILDREN" || code === "IS_JUMP_HOST" || code === "MOVE_CYCLE" || code === "TASK_RUNNING") return c.json({ error: code }, 409);
+  if (code === "HAS_CHILDREN" || code === "IS_JUMP_HOST" || code === "MOVE_CYCLE" || code === "TASK_RUNNING" || code === "PROTECTED") return c.json({ error: code }, 409);
   if (code.startsWith("JUMP_") || code === "VM_NO_ADDRESS") return c.json({ error: code }, 422);
   if (code.includes("FOREIGN KEY") || code.includes("CHECK constraint")) return c.json({ error: "constraint violated" }, 409);
   throw err;

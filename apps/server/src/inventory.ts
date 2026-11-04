@@ -1,5 +1,9 @@
 import type { Database } from "bun:sqlite";
 import type { EffectiveNode, InventoryNode, JumpMode, NodeKind, OsKind, ShellKind } from "@sysadm/shared";
+import { getSetting } from "./settings";
+
+// Setting with the id of the station's own localhost node (localhost.ts): it and its organization are built in.
+export const LOCALHOST_NODE = "localhost_node";
 
 const MAX_JUMP_HOPS = 3;
 const DEFAULT_PORT = 22;
@@ -296,6 +300,7 @@ export function updateNode(db: Database, id: string, patch: NodePatch): Inventor
 
 export function moveNode(db: Database, id: string, parentId: string): InventoryNode {
   db.transaction(() => {
+    if (id === getSetting<string>(db, LOCALHOST_NODE)) throw new Error("PROTECTED");
     if (subtreeRows(loadCtx(db), id).some((row) => row.id === parentId)) throw new Error("MOVE_CYCLE");
     db.run("UPDATE nodes SET parent_id = ? WHERE id = ?", [parentId, id]);
     validateSubtree(db, id);
@@ -319,6 +324,8 @@ export function deleteNode(db: Database, id: string, options: { recursive?: bool
   return db.transaction(() => {
     const ids = subtreeRows(loadCtx(db), id).map((row) => row.id);
     if (ids.length === 0) throw new Error("NOT_FOUND");
+    // Covers the organization too: localhost is always inside it.
+    if (ids.includes(getSetting<string>(db, LOCALHOST_NODE) ?? "")) throw new Error("PROTECTED");
     if (ids.length > 1 && !options.recursive) throw new Error("HAS_CHILDREN");
     const list = ids.map(() => "?").join(",");
     const outside = db

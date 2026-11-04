@@ -6,6 +6,7 @@ import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { errorText } from "@/lib/utils";
 import { fmtDateTime } from "@/i18n";
+import { serverMsg } from "@/i18n/server";
 import ScheduleDialog from "./ScheduleDialog";
 import type { Job, Run, Schedule } from "./types";
 import { t } from "./i18n";
@@ -75,7 +76,7 @@ function JobRow({ job, editable, historyOpen, runs, onRun, onPause, onEdit, onHi
               </>
             )}
           </div>
-          {job.lastError && <p className="text-xs text-destructive">{job.lastError}</p>}
+          {job.lastError && <p className="text-xs text-destructive">{serverMsg(job.lastError)}</p>}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Button size="icon-xs" variant="ghost" title={t("action.runNow")} onClick={onRun}>
@@ -111,7 +112,7 @@ function JobRow({ job, editable, historyOpen, runs, onRun, onPause, onEdit, onHi
                     {t("link.task")}
                   </Link>
                 )}
-                {r.error && <span className="text-destructive">{r.error}</span>}
+                {r.error && <span className="text-destructive">{serverMsg(r.error)}</span>}
               </div>
             ))
           )}

@@ -52,7 +52,7 @@ export default function NodeSettings({ detail, nodes, onChanged }: Props) {
     setDraft({});
     setSkillIds(node.skills);
     setMessage(null);
-  }, [node]);
+  }, [node.id]);
 
   // Local edits live in `draft`; the server value is shown until the user saves.
   const field = <K extends keyof NodeFields>(key: K, fallback: NodeFields[K]) => (key in draft ? draft[key] : fallback) as NodeFields[K];
@@ -85,6 +85,8 @@ export default function NodeSettings({ detail, nodes, onChanged }: Props) {
 
   const host = node.kind === "vm" || node.kind === "hypervisor";
   const jumpMode = field("jumpMode", node.jumpMode) as JumpMode;
+  // The server reports inherited values by node id; the tree gives the names.
+  const nameOf = (nodeId: string) => nodes.find((n) => n.id === nodeId)?.name ?? nodeId;
   const skillsChanged = skillIds.slice().sort().join() !== node.skills.slice().sort().join();
 
   return (
@@ -131,7 +133,7 @@ export default function NodeSettings({ detail, nodes, onChanged }: Props) {
           </select>
         </Field>
         <Field label={<>
-              {t("node.credential")} {effective?.credentialFrom && !node.credentialId && <span>{t("node.credentialFrom", { from: effective.credentialFrom })}</span>}
+              {t("node.credential")} {effective?.credentialFrom && !node.credentialId && <span>{t("node.credentialFrom", { from: nameOf(effective.credentialFrom) })}</span>}
             </>} className="col-span-2">
           <select className={fieldClass} value={field("credentialId", node.credentialId) ?? ""} onChange={(e) => set("credentialId", e.target.value || null)}>
             <option value="">{t("node.inherit")}</option>
@@ -149,11 +151,12 @@ export default function NodeSettings({ detail, nodes, onChanged }: Props) {
             <label key={mode} className="flex items-center gap-2">
               <input type="radio" className="accent-primary" name="jump" checked={jumpMode === mode} onChange={() => set("jumpMode", mode)} />
               {mode === "inherit" &&
-                `${t("node.jumpInherit")}${effective ? ` (${effective.jumpChain.length ? t("common.viaJump") : t("common.direct")}${effective.jumpFrom ? t("node.jumpFrom", { from: effective.jumpFrom }) : ""})` : ""}`}
+                `${t("node.jumpInherit")}${effective ? ` (${effective.jumpChain.length ? `${t("common.viaJump")} ${effective.jumpChain.map(nameOf).join(" → ")}` : t("common.direct")}${effective.jumpFrom && effective.jumpFrom !== id ? t("node.jumpFrom", { from: nameOf(effective.jumpFrom) }) : ""})` : ""}`}
               {mode === "direct" && t("node.jumpDirect")}
               {mode === "via" && t("node.jumpVia")}
             </label>
           ))}
+          {jumpMode === "via" && <p className="text-muted-foreground">{t("node.jumpViaHint")}</p>}
           {jumpMode === "via" && (
             <select className={fieldClass} value={field("jumpNodeId", node.jumpNodeId) ?? ""} onChange={(e) => set("jumpNodeId", e.target.value || null)}>
               <option value="">{t("node.pickNode")}</option>
@@ -189,7 +192,7 @@ export default function NodeSettings({ detail, nodes, onChanged }: Props) {
               <button
                 key={s.id}
                 type="button"
-                title={from ? t("node.skillFrom", { from }) : s.description}
+                title={from ? t("node.skillFrom", { from: from === "os" ? "OS" : nameOf(from) }) : s.description}
                 onClick={() => setSkillIds((ids) => (on ? ids.filter((x) => x !== s.id) : [...ids, s.id]))}
                 className={cn(
                   "rounded-full border px-2.5 py-0.5 text-xs transition-colors",

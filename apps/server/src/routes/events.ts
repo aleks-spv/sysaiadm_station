@@ -105,7 +105,8 @@ async function autoAnswer(deps: Deps, sessionID: string, event: object): Promise
 // After a reconnect, events were lost: re-read pending permissions and questions and fix task status from them.
 async function resync(deps: Deps): Promise<void> {
   const tasks = deps.db
-    .query<{ session_id: string; id: string }, []>("SELECT session_id, id FROM tasks WHERE status IN ('running','idle','waiting_permission')")
+    // Idle tasks stay idle: an empty pending list says nothing about whether the session runs, and every finished task would turn "running".
+    .query<{ session_id: string; id: string }, []>("SELECT session_id, id FROM tasks WHERE status IN ('running','waiting_permission')")
     .all();
   for (const task of tasks) {
     const pending = await listPending(deps.client, task.session_id).catch(() => null);
@@ -167,7 +168,12 @@ export function eventsRoutes(bus: Bus): Hono {
       const unsubscribe = bus.subscribe((data) => {
         stream.writeSSE({ data }).catch(() => unsubscribe());
       });
-      stream.onAbort(() => unsubscribe());
+      // Proxies close idle streams (nginx proxy_read_timeout 60 s); a named event the client ignores keeps it open.
+      const ping = setInterval(() => stream.writeSSE({ event: "ping", data: "" }).catch(() => {}), 25_000);
+      stream.onAbort(() => {
+        clearInterval(ping);
+        unsubscribe();
+      });
       await new Promise<void>((resolve) => stream.onAbort(() => resolve()));
     }),
   );

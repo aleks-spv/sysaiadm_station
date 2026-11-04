@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Check, Cpu, Database, HardDrive, LoaderCircle, MemoryStick, Network, RefreshCw, Server } from "lucide-react";
 import type { NodeFacts } from "@sysadm/shared";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, copyText } from "@/lib/utils";
 import { fmtDate } from "@/i18n";
 import { t } from "@/i18n/app";
 
@@ -64,7 +64,7 @@ function Copyable({ text, className }: { text: string; className?: string }) {
       type="button"
       title={t("common.copy")}
       onClick={() =>
-        void navigator.clipboard?.writeText(text).then(() => {
+        void copyText(text).then(() => {
           setDone(true);
           setTimeout(() => setDone(false), 1000);
         })

@@ -6,7 +6,8 @@ export const MASK = "***";
 
 // Names whose value is a secret. Matched on the end of the key, so DB_PASSWORD and api_key hit
 // while PasswordAuthentication (sshd_config) and PWD (env) do not.
-const SECRET_KEY = String.raw`[A-Za-z0-9_.-]*?(?:password|passwd|passphrase|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|preshared[_-]?key|credentials?)`;
+// `pass` and `_pwd` match only at the end: DB_PASS, MYSQL_PWD. Bare PWD (env) stays.
+const SECRET_KEY = String.raw`[A-Za-z0-9_.-]*?(?:password|passwd|pass|passphrase|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|preshared[_-]?key|credentials?|_pwd)`;
 
 const MASKS: Array<{ re: RegExp; replace: (...m: string[]) => string }> = [
   // PEM private keys, also a block cut off by truncation (no END line).
@@ -17,8 +18,13 @@ const MASKS: Array<{ re: RegExp; replace: (...m: string[]) => string }> = [
   // key = value, key: value, "key": "value", --key=value. The separator stays on one line, so a YAML key
   // with a nested block below it is left alone.
   {
-    re: new RegExp(String.raw`\b(${SECRET_KEY})(["']?[ \t]*[:=][ \t]*)(?:"([^"\n]*)"|'([^'\n]*)'|([^\s"',;]+))`, "gi"),
+    re: new RegExp(String.raw`\b(${SECRET_KEY})(["']?[ \t]*[:=][ \t]*)(?:"([^"\n]*)"|'([^'\n]*)'|([^\s"']+))`, "gi"),
     replace: (_, key, sep, dq, sq) => `${key}${sep}${dq !== undefined ? `"${MASK}"` : sq !== undefined ? `'${MASK}'` : MASK}`,
+  },
+  // Space-separated CLI flags: --password hunter2
+  {
+    re: new RegExp(String.raw`(--${SECRET_KEY}[ \t]+)(?:"[^"\n]*"|'[^'\n]*'|[^\s"']+)`, "gi"),
+    replace: (_, head) => `${head}${MASK}`,
   },
   // Authorization: Bearer … / Basic …
   { re: /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/g, replace: (_, scheme) => `${scheme} ${MASK}` },

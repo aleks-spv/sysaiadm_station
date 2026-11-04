@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { NodeFacts } from "@sysadm/shared";
+import type { NodeFacts, OsKind } from "@sysadm/shared";
 import { audit } from "./guard";
 import { getNode } from "./inventory";
 import { pinHostKeys, planHops } from "./routes/internal";
@@ -213,6 +213,17 @@ export function parseWindowsFacts(output: string, now: number): NodeFacts {
   };
 }
 
+// The card is the truth about the OS. Proxmox reports itself as Debian, so a proxmox node stays proxmox;
+// an unknown distro keeps whatever the admin set.
+export function osFromFacts(facts: NodeFacts, current: OsKind): OsKind {
+  if (/windows/i.test(facts.os)) return "windows";
+  if (current === "proxmox" && /debian/i.test(facts.os)) return current;
+  if (/ubuntu/i.test(facts.os)) return "ubuntu";
+  if (/debian/i.test(facts.os)) return "debian";
+  if (/proxmox/i.test(facts.os)) return "proxmox";
+  return current;
+}
+
 export function getFacts(db: Database, nodeId: string): NodeFacts | null {
   const row = db.query<{ facts: string }, [string]>("SELECT facts FROM node_facts WHERE node_id = ?").get(nodeId);
   return row ? (JSON.parse(row.facts) as NodeFacts) : null;
@@ -264,6 +275,8 @@ export async function collectFacts(
     "INSERT INTO node_facts (node_id, facts, collected_at) VALUES (?, ?, ?) ON CONFLICT (node_id) DO UPDATE SET facts = excluded.facts, collected_at = excluded.collected_at",
     [nodeId, JSON.stringify(facts), facts.collectedAt],
   );
+  const os = osFromFacts(facts, node.os);
+  if (os !== node.os) db.run("UPDATE nodes SET os = ? WHERE id = ?", [os, nodeId]);
   audit(db, { actor, action: "facts_collect", nodeId, detail: { hostname: facts.hostname } });
   return facts;
 }

@@ -24,12 +24,21 @@ RUN set -eu; \
 FROM oven/bun:1-slim
 WORKDIR /app
 # WireGuard plugin: wg-quick + root wrapper; uid 1000 may sudo only the wrapper.
+# openssh-server: the built-in "localhost" node (127.0.0.1:22, user localadm, no sudo); host keys come from /data/ssh.
 # hadolint ignore=DL3008
-RUN apt-get update && apt-get install -y --no-install-recommends wireguard-tools iproute2 sudo \
-  && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get install -y --no-install-recommends wireguard-tools iproute2 sudo openssh-server \
+  && rm -rf /var/lib/apt/lists/* /etc/ssh/ssh_host_* \
   && echo '#1000 ALL=(root) NOPASSWD: /usr/local/sbin/sysadm-wg' > /etc/sudoers.d/sysadm-wg \
-  && chmod 440 /etc/sudoers.d/sysadm-wg
+  && chmod 440 /etc/sudoers.d/sysadm-wg \
+  && useradd -m -u 1001 -s /bin/bash -p '*' localadm
 COPY --chmod=755 plugins/wireguard/sysadm-wg /usr/local/sbin/sysadm-wg
+COPY docker/sshd-sysadm.conf /etc/ssh/sshd_config.d/sysadm.conf
+# sysadm-oc: the localhost agent manages the station's opencode; localadm may sudo only this script, as uid 1000.
+COPY --chmod=755 docker/sysadm-oc /usr/local/bin/sysadm-oc
+COPY --chmod=644 docker/sysadm-oc.ts /usr/local/lib/sysadm-oc.ts
+RUN echo 'localadm ALL=(#1000) NOPASSWD: /usr/local/bin/sysadm-oc' > /etc/sudoers.d/sysadm-oc \
+  && chmod 440 /etc/sudoers.d/sysadm-oc
+COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/sysadm-entrypoint
 COPY --from=build /src/package.json /src/bun.lock ./
 COPY --from=build /src/node_modules ./node_modules
 COPY --from=build /src/apps/server ./apps/server
@@ -38,10 +47,17 @@ COPY --from=build /src/plugins ./plugins
 COPY --from=build /src/apps/web/dist ./apps/web/dist
 COPY --from=build /src/skills ./skills
 COPY --from=rtk /usr/local/bin/rtk /usr/local/bin/rtk
-ENV SKILLS_DIR=/app/skills WEB_DIST=/app/apps/web/dist OPENCODE_HOME=/data/opencode PLUGIN_PATH=/app/packages/plugin
+ENV SKILLS_DIR=/app/skills WEB_DIST=/app/apps/web/dist OPENCODE_HOME=/data/opencode PLUGIN_PATH=/app/packages/plugin \
+  LOCAL_SSH_KEY=/data/ssh/localhost_ed25519 \
+  XDG_DATA_HOME=/data/opencode/data \
+  XDG_CONFIG_HOME=/data/opencode/config \
+  XDG_STATE_HOME=/data/opencode/state \
+  XDG_CACHE_HOME=/data/opencode/cache \
+  PATH="/data/opencode/bin:${PATH}"
 # Volumes mounted at /data and /infra inherit this ownership; otherwise SQLite and opencode cannot create their files.
 RUN mkdir -p /data/opencode /infra && chown -R 1000:1000 /data /infra
-USER 1000:1000
+# Starts as root for sshd only; the entrypoint runs the app as 1000:1000.
+ENTRYPOINT ["/usr/local/bin/sysadm-entrypoint"]
 EXPOSE 8080
 # start-period: the first start downloads opencode (~250 MB) into /data/opencode/bin before the port opens.
 HEALTHCHECK --interval=15s --timeout=3s --start-period=300s CMD ["bun", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]

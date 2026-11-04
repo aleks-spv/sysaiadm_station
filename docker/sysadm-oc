@@ -1,0 +1,8 @@
+#!/bin/bash
+# The localhost node's agent manages the station's opencode through this. localadm may sudo only this file as uid 1000;
+# the work is in sysadm-oc.ts, which calls the internal API with a token localadm cannot read (/data is 700).
+set -euo pipefail
+if [[ $(id -u) != 1000 ]]; then exec sudo -n -u '#1000' /usr/local/bin/sysadm-oc "$@"; fi
+# Clean env and cwd: bun must not pick up a bunfig.toml or .env planted by the caller.
+cd /
+exec env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/home/bun /usr/local/bin/bun /usr/local/lib/sysadm-oc.ts "$@"

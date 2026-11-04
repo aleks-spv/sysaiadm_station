@@ -12,7 +12,7 @@ import RightPanel from "@/components/RightPanel";
 import { STATUS_DOT } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import NodeCard from "@/components/NodeCard";
-import Transcript from "@/components/Transcript";
+import Transcript, { pinId } from "@/components/Transcript";
 import { BUILTIN_COMMANDS, expandCommand, parseSlash } from "@/lib/commands";
 import { mergeTail, parseMessages, streamKey, toolCalls, usageOf } from "@/lib/messages";
 import { CHAT_WIDTH, usePrefs } from "@/lib/prefs";
@@ -67,13 +67,18 @@ export default function ChatPage() {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
+  // Only the newest node request lands: after a quick A→B switch a late answer for A must not show A
+  // while the composer sends to B.
+  const nodeSeq = useRef(0);
   const loadNode = useCallback(() => {
+    const seq = ++nodeSeq.current;
     Promise.all([api.node(id), api.tree()])
       .then(([d, tree]) => {
+        if (seq !== nodeSeq.current) return;
         setDetail(d);
         setNodes(tree);
       })
-      .catch((err: unknown) => setError(errorText(err)));
+      .catch((err: unknown) => seq === nodeSeq.current && setError(errorText(err)));
   }, [id]);
 
   // One reload at a time per task: events arrive in bursts, and overlapping responses landing out of
@@ -119,12 +124,45 @@ export default function ChatPage() {
       .catch((err: unknown) => current() && setError(errorText(err)))
       .finally(() => {
         state.busy = false;
-        if (state.again) {
+        // The page may have moved to another task meanwhile; its own loader takes over then.
+        if (state.again && current()) {
           state.again = false;
           loadTask();
         }
       });
   }, [taskId]);
+
+  // Answers pinned into the session instructions: they stay in the model's context even after compaction.
+  const [pins, setPins] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setPins(new Set());
+    if (!taskId) return;
+    let alive = true;
+    api
+      .taskPins(taskId)
+      .then((p) => alive && setPins(new Set(p.map((x) => x.messageId))))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [taskId]);
+  const onPin = useCallback(
+    (item: { id: string; text: string }, on: boolean) => {
+      if (!taskId) return;
+      const key = pinId(item);
+      (on ? api.pin(taskId, key, item.text) : api.unpin(taskId, key))
+        .then(() =>
+          setPins((s) => {
+            const next = new Set(s);
+            if (on) next.add(key);
+            else next.delete(key);
+            return next;
+          }),
+        )
+        .catch((err: unknown) => setError(errorText(err)));
+    },
+    [taskId],
+  );
 
   // Streamed tokens, flushed once per frame.
   const [streamed, setStreamed] = useState<Record<string, string>>({});
@@ -215,7 +253,7 @@ export default function ChatPage() {
   const usage = useMemo(() => usageOf(messages), [messages]);
   const calls = useMemo(() => toolCalls(items), [items]);
   // Stop stays reachable while a command still runs, even if the task status already moved on.
-  const stoppable = live || (task?.status !== "stopped" && calls.some((c) => c.status === "running"));
+  const stoppable = live || (task?.status !== "stopped" && calls.some((c) => c.status === "running" || c.status === "streaming"));
   const contextLimit = models.find((m) => m.providerID === usage.model?.providerID && m.id === usage.model?.id)?.limit?.context ?? null;
 
   // Follow new output unless the user scrolled up to read.
@@ -297,16 +335,6 @@ export default function ChatPage() {
 
   const stop = () => taskId && api.stopTask(taskId).then(loadTask).catch((err: unknown) => setError(errorText(err)));
 
-  const pinMessage = (messageId: string, pin: boolean) => {
-    if (!task?.sessionID) return;
-    const key = `pinned_${messageId}`;
-    const endpoint = `/api/opencode/sessions/${task.sessionID}/instructions/entry/${key}`;
-    const req = pin
-      ? fetch(endpoint, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ value: true }) })
-      : fetch(endpoint, { method: "DELETE" });
-    req.catch((err: unknown) => console.error("Pin failed:", err));
-  };
-
   const reply = async (requestID: string, decision: "once" | "always" | "reject") => {
     if (!taskId) return;
     try {
@@ -328,7 +356,7 @@ export default function ChatPage() {
     }
   };
 
-  if (!detail) return <div className="grid flex-1 place-items-center text-sm text-muted-foreground">{error ?? t("common.loading")}</div>;
+  if (!detail || detail.node.id !== id) return <div className="grid flex-1 place-items-center text-sm text-muted-foreground">{error ?? t("common.loading")}</div>;
   const { node } = detail;
   const host = node.kind === "vm" || node.kind === "hypervisor";
   const path = pathTo(nodes, node.id);
@@ -367,7 +395,7 @@ export default function ChatPage() {
                 {STATUS_LABEL[task.status]}
               </span>
             )}
-            {live && (
+            {stoppable && (
               <Button size="sm" variant="outline" onClick={stop}>
                 <Square className="fill-current" /> {t("common.stop")}
               </Button>
@@ -431,7 +459,7 @@ export default function ChatPage() {
                 </p>
               </div>
             )}
-            <Transcript items={items} live={live} working={live && !first && !question} sessionID={task?.sessionID} onPin={pinMessage} onStop={stoppable ? stop : undefined} />
+            <Transcript items={items} live={live} working={live && !first && !question} onStop={stoppable ? stop : undefined} pins={pins} onPin={onPin} />
           </div>
         </div>
 

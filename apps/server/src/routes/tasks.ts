@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { Hono } from "hono";
 import type { Task, TaskStatus } from "@sysadm/shared";
 import { abortTaskExecs } from "../exec-registry";
-import { audit } from "../guard";
+import { audit, pruneOld } from "../guard";
 import { getNode } from "../inventory";
 import { nodeDir } from "../materialize";
 import {
@@ -13,6 +13,9 @@ import {
   interrupt,
   listPending,
   listForms,
+  listPins,
+  pin,
+  unpin,
   replyForm,
   cancelForm,
   type FormAnswer,
@@ -39,6 +42,7 @@ const RETENTION_KEY = "task_archive_days";
 const RETENTION_DEFAULT = 90;
 const AUTOPILOT_RULES: Permissions = [{ action: "remote_exec", resource: "*", effect: "allow" }];
 const DECISIONS = ["once", "always", "reject"] as const;
+const MESSAGE_ID = /^[A-Za-z0-9][\w.-]{0,99}$/;
 const AGENT_NAME = /^[\w.-]{1,64}$/;
 const STATUSES: TaskStatus[] = ["running", "idle", "waiting_permission", "stopped", "error"];
 const TASK_COLUMNS = "id, node_id, session_id, title, status, created_at, archived_at";
@@ -132,8 +136,12 @@ export function purgeArchivedTasks(deps: TaskDeps): number {
 
 // Runs the purge at start and then hourly.
 export function startArchivePurge(deps: TaskDeps): () => void {
-  purgeArchivedTasks(deps);
-  const timer = setInterval(() => purgeArchivedTasks(deps), PURGE_CHECK_MS);
+  const run = () => {
+    purgeArchivedTasks(deps);
+    pruneOld(deps.db);
+  };
+  run();
+  const timer = setInterval(run, PURGE_CHECK_MS);
   return () => clearInterval(timer);
 }
 
@@ -240,9 +248,14 @@ export function tasksRoutes(deps: TaskDeps): Hono {
     if (!row) return c.json({ error: "not found" }, 404);
     // Kill the remote commands first: they must stop even if opencode is slow or down.
     const killed = abortTaskExecs(row.id);
-    db.run("UPDATE tasks SET status = 'stopped' WHERE id = ?", [row.id]);
     audit(db, { actor: c.get("actor"), action: "stop", nodeId: row.node_id, taskId: row.id, detail: { killed } });
-    await interrupt(client, row.session_id).catch(() => {});
+    // Marked stopped only once opencode confirms: a failed interrupt leaves the model running, and Stop must stay visible.
+    const failed = await interrupt(client, row.session_id).then(
+      () => null,
+      (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    );
+    if (failed) return c.json({ error: `opencode не остановил сессию: ${failed}` }, 502);
+    db.run("UPDATE tasks SET status = 'stopped' WHERE id = ?", [row.id]);
     return c.json({ ok: true });
   });
 
@@ -307,6 +320,34 @@ export function tasksRoutes(deps: TaskDeps): Hono {
     questionGuard.answered(row.session_id, formID, answer as FormAnswer);
     // The answer itself may hold anything the admin typed; the audit keeps only which fields were answered.
     audit(db, { actor: c.get("actor"), action: "question_reply", nodeId: row.node_id, taskId: row.id, detail: { formID, fields: Object.keys(answer as object) } });
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/tasks/:id/pins", async (c) => {
+    const row = findTask(db, c.req.param("id"));
+    if (!row) return c.json({ error: "not found" }, 404);
+    return c.json(await listPins(client, row.session_id));
+  });
+
+  app.put("/api/tasks/:id/pins/:messageId", async (c) => {
+    const row = findTask(db, c.req.param("id"));
+    if (!row) return c.json({ error: "not found" }, 404);
+    const messageId = c.req.param("messageId");
+    if (!MESSAGE_ID.test(messageId)) return c.json({ error: "bad message id" }, 400);
+    const body = await c.req.json().catch(() => null);
+    if (typeof body?.text !== "string" || !body.text.trim() || body.text.length > 64 * 1024) return c.json({ error: "text is required, up to 64 KiB" }, 400);
+    await pin(client, row.session_id, messageId, body.text);
+    audit(db, { actor: c.get("actor"), action: "message_pin", nodeId: row.node_id, taskId: row.id, detail: { messageId } });
+    return c.json({ ok: true });
+  });
+
+  app.delete("/api/tasks/:id/pins/:messageId", async (c) => {
+    const row = findTask(db, c.req.param("id"));
+    if (!row) return c.json({ error: "not found" }, 404);
+    const messageId = c.req.param("messageId");
+    if (!MESSAGE_ID.test(messageId)) return c.json({ error: "bad message id" }, 400);
+    await unpin(client, row.session_id, messageId);
+    audit(db, { actor: c.get("actor"), action: "message_unpin", nodeId: row.node_id, taskId: row.id, detail: { messageId } });
     return c.json({ ok: true });
   });
 

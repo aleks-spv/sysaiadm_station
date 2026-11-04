@@ -3,7 +3,7 @@ import type { Credential } from "@sysadm/shared";
 import { api, type ApiToken, type AuditRow } from "@/api";
 import { fmtDateTime } from "@/i18n";
 import { t } from "@/i18n/settings";
-import { errorText, fieldClass } from "@/lib/utils";
+import { copyText, errorText, fieldClass } from "@/lib/utils";
 
 const SCOPES: Array<[string, string]> = [
   ["read", t("tokens.scopeRead")],
@@ -185,7 +185,7 @@ export function TokensTab() {
           <p>{t("tokens.shownOnce")}</p>
           <code className="block break-all">{created}</code>
           <div className="flex gap-3">
-            <button className={buttonClass} onClick={() => void navigator.clipboard.writeText(created)}>
+            <button className={buttonClass} onClick={() => void copyText(created)}>
               {t("common.copy")}
             </button>
             <button className="text-sm underline" onClick={() => setCreated(null)}>

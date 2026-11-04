@@ -27,6 +27,7 @@ export function validateConf(text: string): ValidateResult {
   let hasPrivateKey = false;
   let peerCount = 0;
   let tableOff = false;
+  const fullTunnelIPs: string[] = [];
 
   for (const raw of text.split("\n")) {
     const line = raw.trim();
@@ -85,17 +86,15 @@ export function validateConf(text: string): ValidateResult {
           else peers[peers.length - 1].publicKey = value;
           break;
         case "PresharedKey":
+          if (!KEY_RE.test(value)) errors.push("PresharedKey должен быть 44 знаками base64, оканчивающимися на =");
           break;
         case "Endpoint":
           peers[peers.length - 1].endpoint = value;
           break;
         case "AllowedIPs": {
           const ips = value.split(",").map((s) => s.trim());
-          for (const ip of ips) {
-            if (ip === "0.0.0.0/0" || ip === "::/0") {
-              if (!tableOff) errors.push(`${ip} запрещён: полный туннель уведёт весь трафик контейнера, включая доступ к LLM`);
-            }
-          }
+          // Table = off may come after [Peer], so the decision is made after the loop.
+          fullTunnelIPs.push(...ips.filter((ip) => ip === "0.0.0.0/0" || ip === "::/0"));
           peers[peers.length - 1].allowedIPs = ips;
           break;
         }
@@ -116,6 +115,7 @@ export function validateConf(text: string): ValidateResult {
     }
   }
 
+  if (!tableOff) for (const ip of fullTunnelIPs) errors.push(`${ip} запрещён: полный туннель уведёт весь трафик контейнера, включая доступ к LLM`);
   if (!hasInterface) errors.push("отсутствует секция [Interface]");
   if (!hasPrivateKey) errors.push("в секции [Interface] отсутствует PrivateKey");
   if (peerCount === 0) errors.push("добавьте хотя бы один [Peer]");

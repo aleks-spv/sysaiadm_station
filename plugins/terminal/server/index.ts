@@ -1,5 +1,9 @@
 import { Hono } from "hono";
+import { getCookie } from "hono/cookie";
+import { sessionAlive } from "../../../apps/server/src/auth";
 import type { PluginContext, ServerPlugin } from "../../../apps/server/src/plugins/types";
+
+const SESSION_CHECK_MS = 30_000;
 
 const MAX_SESSIONS = 8;
 const MAX_INPUT = 64 * 1024;
@@ -60,10 +64,19 @@ export function createTerminalPlugin(): ServerPlugin {
           const actor: string = c.get("actor") ?? "admin";
           const cols = size(c.req.query("cols"), 80);
           const rows = size(c.req.query("rows"), 24);
+          const sid = getCookie(c, "sid");
           let shell: Awaited<ReturnType<PluginContext["ssh"]["openShell"]>> | null = null;
           let closed = false;
           let counted = false;
           let opened = 0;
+          let sessionTimer: ReturnType<typeof setInterval> | undefined;
+          // Logout or an expired session ends the shell: false = the socket is being closed.
+          const alive = (ws: { send(data: string): void; close(code?: number, reason?: string): void }): boolean => {
+            if (sessionAlive(ctx.db, sid)) return true;
+            ws.send(JSON.stringify({ type: "error", message: "сессия завершена, войдите снова" }));
+            ws.close(4401, "session ended");
+            return false;
+          };
 
           return {
             onOpen(_evt, ws) {
@@ -71,6 +84,7 @@ export function createTerminalPlugin(): ServerPlugin {
                 ws.send(JSON.stringify({ type: "error", message }));
                 ws.close(1011, "error");
               };
+              sessionTimer = setInterval(() => alive(ws), SESSION_CHECK_MS);
               if (active >= MAX_SESSIONS) return fail(`открыто слишком много терминалов (максимум ${MAX_SESSIONS})`);
               active++;
               counted = true;
@@ -98,11 +112,12 @@ export function createTerminalPlugin(): ServerPlugin {
                   fail(err instanceof Error ? err.message : "не удалось открыть терминал");
                 });
             },
-            onMessage(evt) {
-              if (shell) handleClientMessage(evt.data, shell.session);
+            onMessage(evt, ws) {
+              if (shell && alive(ws)) handleClientMessage(evt.data, shell.session);
             },
             onClose() {
               closed = true;
+              clearInterval(sessionTimer);
               if (counted) active--;
               counted = false;
               if (shell) {

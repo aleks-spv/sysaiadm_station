@@ -13,6 +13,7 @@
   "include": [
     "apps/server/src",
     "packages/*/src",
-    "plugins/*/server"
+    "plugins/*/server",
+    "docker/*.ts"
   ]
 }

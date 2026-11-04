@@ -5,6 +5,7 @@ import { api } from "@/api";
 import ImportPanel from "@/components/ImportPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { serverMsg } from "@/i18n/server";
 import { t } from "@/i18n/settings";
 import { errorText, fieldClass } from "@/lib/utils";
 
@@ -141,7 +142,7 @@ function ImportForm({ options, onImported }: { options: Array<{ id: string; labe
       {warnings.length > 0 && (
         <ul className="list-disc space-y-0.5 pl-5 text-xs text-amber-500">
           {warnings.map((w) => (
-            <li key={w}>{w}</li>
+            <li key={w}>{serverMsg(w)}</li>
           ))}
         </ul>
       )}

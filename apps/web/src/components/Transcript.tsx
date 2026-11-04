@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
-import { Brain, Check, ChevronRight, CircleCheck, CircleX, Copy, Globe, ListTodo, LoaderCircle, MessageCircleQuestion, Pin, Sparkles, Square, TerminalSquare, Wrench } from "lucide-react";
+import { memo, useEffect, useMemo, useState } from "react";
+import { Brain, Check, ChevronRight, CircleCheck, CircleX, Copy, Globe, ListTodo, LoaderCircle, MessageCircleQuestion, Pin, PinOff, Sparkles, Square, TerminalSquare, Wrench } from "lucide-react";
 import Markdown from "@/components/Markdown";
 import { colorize, parseAnsi } from "@/lib/ansi";
 import { todoList, type ChatItem, type ToolCall } from "@/lib/messages";
 import { usePrefs } from "@/lib/prefs";
 import { APP_ANSI_DARK, APP_ANSI_LIGHT, terminalPalette, type TerminalPalette } from "@/lib/terminalThemes";
 import { resolvedTheme } from "@/theme";
-import { cn } from "@/lib/utils";
+import { cn, copyText } from "@/lib/utils";
 import { t as tr } from "@/i18n/app";
 
 function formatTime(epoch: number): string {
@@ -71,10 +71,12 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
       aria-label={tr("common.copy")}
       onClick={(e) => {
         e.stopPropagation();
-        void navigator.clipboard?.writeText(text).then(() => {
-          setDone(true);
-          setTimeout(() => setDone(false), 1200);
-        });
+        copyText(text)
+          .then(() => {
+            setDone(true);
+            setTimeout(() => setDone(false), 1200);
+          })
+          .catch(() => {}); // Denied or insecure context: stay unchanged, no "copied" flag.
       }}
       className={cn("rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground", className)}
     >
@@ -258,15 +260,11 @@ function ReasoningRow({ item }: { item: Thought }) {
 
 type Shown = Exclude<ChatItem, { kind: "reasoning" | "tool" }>;
 
-function Block({ item, onPin }: { item: Shown; onPin?: (messageId: string, pin: boolean) => void }) {
-  const [pinned, setPinned] = useState(false);
-  const togglePin = () => {
-    if (item.kind !== "user") return;
-    const next = !pinned;
-    setPinned(next);
-    onPin?.(item.messageId, next);
-  };
+// Memoised on content: streaming re-parses the history every frame, and only the growing block should re-render.
+// Pin key for an answer block: its stable item id ("msg:text:0") in the characters the server accepts.
+export const pinId = (item: { id: string }) => item.id.replaceAll(":", ".");
 
+const Block = memo(function Block({ item, pinned, onPin }: { item: Shown; pinned: boolean; onPin?: (item: Shown, pin: boolean) => void }) {
   switch (item.kind) {
     case "user":
       return (
@@ -274,14 +272,6 @@ function Block({ item, onPin }: { item: Shown; onPin?: (messageId: string, pin: 
           <div className="max-w-[85%] rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">{item.text}</div>
           <div className="flex items-center gap-0.5 text-[11px] text-muted-foreground">
             <span className="mr-1 tabular-nums">{formatTime(item.time)}</span>
-            <button
-              type="button"
-              onClick={togglePin}
-              title={pinned ? tr("msg.unpin") : tr("msg.pin")}
-              className={cn("rounded p-1 hover:bg-accent hover:text-foreground", !pinned && "opacity-0 group-hover/msg:opacity-100")}
-            >
-              <Pin className={cn("size-3.5", pinned && "fill-current text-primary")} />
-            </button>
             <CopyButton text={item.text} className="opacity-0 group-hover/msg:opacity-100" />
           </div>
         </div>
@@ -290,16 +280,28 @@ function Block({ item, onPin }: { item: Shown; onPin?: (messageId: string, pin: 
       return (
         <div className="group/msg">
           <Markdown text={item.text} className="text-sm" />
-          <div className="mt-1 flex items-center gap-0.5 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover/msg:opacity-100">
+          <div className={cn("mt-1 flex items-center gap-0.5 text-[11px] text-muted-foreground transition-opacity group-hover/msg:opacity-100", !pinned && "opacity-0")}>
             <span className="mr-1 tabular-nums">{formatTime(item.time)}</span>
             <CopyButton text={item.text} />
+            {onPin && (
+              <button
+                type="button"
+                onClick={() => onPin(item, !pinned)}
+                title={tr(pinned ? "msg.unpin" : "msg.pin")}
+                aria-label={tr(pinned ? "msg.unpin" : "msg.pin")}
+                className={cn("rounded p-1 hover:bg-accent hover:text-foreground", pinned && "text-primary")}
+              >
+                {pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+              </button>
+            )}
           </div>
         </div>
       );
     case "error":
       return <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">{item.text}</div>;
   }
-}
+  // onPin is left out: ChatPage keeps it stable per task.
+}, (a, b) => a.item.kind === b.item.kind && a.item.text === b.item.text && a.pinned === b.pinned && !a.onPin === !b.onPin);
 
 type Step = ToolCall | Thought;
 type Run = { kind: "tools"; id: string; steps: Step[] } | Shown;
@@ -310,16 +312,18 @@ const isThought = (s: Step): s is Thought => "kind" in s;
 export default function Transcript({
   items,
   working,
-  onPin,
   onStop,
+  pins,
+  onPin,
 }: {
   items: ChatItem[];
   live: boolean;
   working: boolean;
-  sessionID?: string;
-  onPin?: (messageId: string, pin: boolean) => void;
   // Shown on the running command; undefined when there is nothing to stop.
   onStop?: () => void;
+  // Answers pinned into the model's context, by pinId.
+  pins?: Set<string>;
+  onPin?: (item: Shown, pin: boolean) => void;
 }) {
   const prefs = usePrefs();
   // Consecutive tool calls sit together as one tight list.
@@ -376,7 +380,7 @@ export default function Transcript({
             {r.steps.map((s) => (isThought(s) ? <ReasoningRow key={s.id} item={s} /> : <ToolRow key={s.id} call={s} expand={prefs.expandOutput} onStop={onStop} />))}
           </div>
         ) : (
-          <Block key={r.id} item={r} onPin={onPin} />
+          <Block key={r.id} item={r} pinned={pins?.has(pinId(r)) ?? false} onPin={onPin} />
         ),
       )}
       {working && !toolRuns && (

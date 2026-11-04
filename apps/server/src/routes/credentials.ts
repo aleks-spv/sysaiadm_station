@@ -84,17 +84,17 @@ export function credentialsRoutes(db: Database, masterKey: Buffer, now: () => nu
     const row = findRow(id);
     if (!row) return c.json({ error: "not found" }, 404);
     const body = await readBody(c);
-    if (body?.name !== undefined) {
-      if (typeof body.name !== "string" || body.name.length === 0) return c.json({ error: "bad name" }, 400);
-      db.run("UPDATE credentials SET name = ? WHERE id = ?", [body.name, id]);
-    }
+    // Everything is validated before the first write: a bad field must not leave a half-updated credential.
+    if (body?.name !== undefined && (typeof body.name !== "string" || body.name.length === 0)) return c.json({ error: "bad name" }, 400);
     const user = optUser(body?.user);
     if (user === false) return c.json({ error: "bad user" }, 400);
-    if (user !== undefined) db.run("UPDATE credentials SET user = ? WHERE id = ?", [user, id]);
     const hasSecret = body?.password !== undefined || body?.privateKey !== undefined;
-    if (hasSecret) {
-      const payload = payloadFor(row.type, body ?? {});
-      if (!payload) return c.json({ error: "secret does not match credential type" }, 400);
+    const payload = hasSecret ? payloadFor(row.type, body ?? {}) : null;
+    if (hasSecret && !payload) return c.json({ error: "secret does not match credential type" }, 400);
+
+    if (body?.name !== undefined) db.run("UPDATE credentials SET name = ? WHERE id = ?", [body.name as string, id]);
+    if (user !== undefined) db.run("UPDATE credentials SET user = ? WHERE id = ?", [user, id]);
+    if (payload) {
       const sealed = seal(masterKey, JSON.stringify(payload), id);
       db.run("UPDATE credentials SET ciphertext = ?, iv = ?, tag = ? WHERE id = ?", [sealed.ciphertext, sealed.iv, sealed.tag, id]);
     }

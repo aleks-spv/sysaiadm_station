@@ -42,6 +42,14 @@ test("queries that name our servers or private IPs never leave", () => {
   expect(leakReason(db, "nginx 502 on 10.0.3.4")).toContain("IP");
   expect(leakReason(db, "mysql slow on DB01.acme.local")).toContain("инвентаря");
   expect(leakReason(db, "nginx upstream timed out 110")).toBeNull();
+  expect(leakReason(db, "ACME zabbix agent error")).toContain("имя клиента");
+  expect(leakReason(db, "acmetools changelog")).toBeNull();
+  createNode(db, { parentId: null, kind: "company", name: "ООО Ромашка" });
+  createNode(db, { parentId: null, kind: "hypervisor", name: "pve-node3", address: "192.0.2.10" });
+  createNode(db, { parentId: null, kind: "hypervisor", name: "nginx", address: "192.0.2.11" });
+  expect(leakReason(db, "ооо ромашка 1с не стартует")).toContain("имя клиента");
+  expect(leakReason(db, "pve-node3 corosync retransmit")).toContain("имя клиента");
+  expect(leakReason(db, "nginx 502 bad gateway")).toBeNull();
 });
 
 test("SearXNG results are clipped and filtered; built-in providers go through opencode", async () => {

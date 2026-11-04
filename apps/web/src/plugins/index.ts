@@ -29,7 +29,7 @@ export interface PanelTool {
 }
 
 // UI half of a SysAiAdm Station plugin (<repo>/plugins/<id>/web); the id matches the server plugin.
-// A plugin with a Page gets a sidebar entry and /plugins/<id>, or a settings section with placement "settings".
+// A plugin's Page opens from its card in Settings → Plugins; unless placement is "settings" it also gets a sidebar entry and /plugins/<id>.
 export interface WebPlugin {
   id: string;
   title: string;

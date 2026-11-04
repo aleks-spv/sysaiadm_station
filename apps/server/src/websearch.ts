@@ -66,6 +66,17 @@ export function leakReason(db: Database, query: string): string | null {
   for (const { address } of addresses) {
     if (address.length >= 4 && q.includes(address.toLowerCase())) return "в запросе адрес сервера из инвентаря";
   }
+  // Company names always count; host names only when host-like (web01, db-prod), so a node called
+  // "nginx" does not block every nginx question.
+  const names = db
+    .query<{ name: string; kind: string }, []>("SELECT DISTINCT name, kind FROM nodes WHERE kind IN ('company','hypervisor','vm')")
+    .all();
+  for (const { name, kind } of names) {
+    const n = name.trim().toLowerCase();
+    if (n.length < 4 || (kind !== "company" && !/[\d.-]/.test(n))) continue;
+    const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`(?<![\\p{L}\\d])${escaped}(?![\\p{L}\\d])`, "u").test(q)) return "в запросе имя клиента или сервера из инвентаря";
+  }
   return null;
 }
 

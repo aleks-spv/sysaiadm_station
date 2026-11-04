@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { fontStack, getPrefs, usePrefs } from "@/lib/prefs";
 import { APP_ANSI_DARK, APP_ANSI_LIGHT, terminalPalette } from "@/lib/terminalThemes";
 import { resolvedTheme } from "@/theme";
+import { serverMsg } from "@/i18n/server";
 import { cn } from "@/lib/utils";
 import { terminalUrl, type ClientMessage, type ServerMessage } from "./protocol";
 import { t } from "./i18n";
@@ -128,8 +129,8 @@ export default function TerminalPanel({ node, active }: { node: InventoryNode; a
           });
           break;
         case "error":
-          term.write(`\r\n\x1b[31m${msg.message}\x1b[0m\r\n`);
-          setLink({ phase: "closed", text: msg.message, error: true });
+          term.write(`\r\n\x1b[31m${serverMsg(msg.message)}\x1b[0m\r\n`);
+          setLink({ phase: "closed", text: serverMsg(msg.message), error: true });
           break;
         case "exit":
           setLink({ phase: "closed", text: t("status.exited", { code: msg.code ?? "—" }) });

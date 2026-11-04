@@ -17,6 +17,7 @@ export interface ModelRef {
 
 const MODEL_KEY = "sysadm.model";
 const AGENT_KEY = "sysadm.agent";
+const COLLAPSED_KEY = "sysadm.modelGroupsCollapsed";
 
 function loadSaved<T>(key: string): T | null {
   try {
@@ -66,6 +67,16 @@ function ModelPicker({ models, value, onChange, locked }: { models: ModelInfo[];
     }
     return [...map.entries()];
   }, [models, query]);
+  const searching = query.trim() !== "";
+  const [collapsed, setCollapsed] = useState<string[]>(() => {
+    const saved = loadSaved<unknown>(COLLAPSED_KEY);
+    return Array.isArray(saved) ? saved : [];
+  });
+  const toggle = (provider: string) => {
+    const next = collapsed.includes(provider) ? collapsed.filter((p) => p !== provider) : [...collapsed, provider];
+    setCollapsed(next);
+    save(COLLAPSED_KEY, next);
+  };
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -95,28 +106,41 @@ function ModelPicker({ models, value, onChange, locked }: { models: ModelInfo[];
             {t("composer.modelFromConfig")}
             {!value && <Check className="ml-auto size-3.5" />}
           </button>
-          {groups.map(([provider, list]) => (
-            <div key={provider}>
-              <div className="px-2 pt-2 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{provider}</div>
-              {list.map((m) => {
-                const selected = m.providerID === value?.providerID && m.id === value?.modelID;
-                return (
-                  <button
-                    key={`${m.providerID}/${m.id}`}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
-                    onClick={() => {
-                      onChange({ providerID: m.providerID, modelID: m.id });
-                      setOpen(false);
-                    }}
-                  >
-                    <span className="truncate">{m.name}</span>
-                    {m.limit?.context ? <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">{Math.round(m.limit.context / 1000)}k</span> : null}
-                    {selected && <Check className="size-3.5 shrink-0" />}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+          {groups.map(([provider, list]) => {
+            // A search shows every match, so collapsed groups open while the query is set.
+            const shut = !searching && collapsed.includes(provider);
+            return (
+              <div key={provider}>
+                <button
+                  aria-expanded={!shut}
+                  className="flex w-full items-center gap-1 rounded-md px-2 pt-2 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground"
+                  onClick={() => toggle(provider)}
+                >
+                  <ChevronDown className={cn("size-3 transition-transform", shut && "-rotate-90")} />
+                  <span className="truncate">{provider}</span>
+                  <span className="ml-auto normal-case tracking-normal">{list.length}</span>
+                </button>
+                {!shut &&
+                  list.map((m) => {
+                    const selected = m.providerID === value?.providerID && m.id === value?.modelID;
+                    return (
+                      <button
+                        key={`${m.providerID}/${m.id}`}
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
+                        onClick={() => {
+                          onChange({ providerID: m.providerID, modelID: m.id });
+                          setOpen(false);
+                        }}
+                      >
+                        <span className="truncate">{m.name}</span>
+                        {m.limit?.context ? <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">{Math.round(m.limit.context / 1000)}k</span> : null}
+                        {selected && <Check className="size-3.5 shrink-0" />}
+                      </button>
+                    );
+                  })}
+              </div>
+            );
+          })}
           {models.length === 0 && <p className="px-2 py-3 text-xs text-muted-foreground">{t("composer.noModels")}</p>}
         </div>
       </PopoverContent>

@@ -5,7 +5,9 @@ export type Verdict = "deny" | "read" | "dangerous" | "normal";
 
 // Best-effort only: regexes over the whole command line, case-insensitive. Not a shell parser.
 const DENY = [
-  /rm\s+-[a-z]*r[a-z]*f?\s+\/(\s|$)/i,
+  // recursive rm of / or /*, in any flag order (rm -r -f /, rm -fr '/*')
+  /\brm\b(?=[^;&|\n]*\s(-[a-z]*r|--recursive))[^;&|\n]*\s['"]?\/\*?['"]?(\s|$|[;&|])/i,
+  /--no-preserve-root/i,
   /\bmkfs(\.|\s)/i,
   /\bdd\b.*\bof=\/dev\/(sd|nvme|vd)/i,
   /:\(\)\s*\{/,
@@ -23,6 +25,8 @@ const DANGEROUS = [
   /\bapt(-get)?\s+(remove|purge|dist-upgrade)\b/i,
   /\bzfs\s+destroy\b/i,
   /\biptables\b|\bnft\b|\bufw\b/i,
+  // Changes to the station's own opencode: asked every time, autopilot only allows remote_exec.
+  /\bsysadm-oc\s+(upgrade|restart|set-config|plugin-add)\b/i,
   // obfuscation markers: anything that can hide what actually runs
   /base64\s+(-d|--decode)/i,
   /\beval\b/i,
@@ -67,4 +71,12 @@ export function audit(db: Database, e: AuditEntry): void {
     "INSERT INTO audit (ts, actor, action, node_id, task_id, detail) VALUES (?, ?, ?, ?, ?, ?)",
     [Date.now(), e.actor, e.action, e.nodeId ?? null, e.taskId ?? null, detail],
   );
+}
+
+const AUDIT_KEEP_MS = 365 * 24 * 60 * 60 * 1000;
+
+// Hourly housekeeping: the audit keeps a year, expired login sessions are otherwise removed only when presented.
+export function pruneOld(db: Database, now = Date.now()): void {
+  db.run("DELETE FROM audit WHERE ts < ?", [now - AUDIT_KEEP_MS]);
+  db.run("DELETE FROM auth_sessions WHERE expires_at <= ?", [now]);
 }

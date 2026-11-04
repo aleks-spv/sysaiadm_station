@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import type { InventoryNode, Task, TaskStatus } from "@sysadm/shared";
 import { api, subscribeEvents } from "../api";
@@ -21,11 +21,18 @@ export default function TasksPage() {
   const [filter, setFilter] = useState<TaskStatus | "">("");
   const [error, setError] = useState<string | null>(null);
 
+  // Only the latest request may write: an older, slower response must not overwrite a newer filter's result.
+  const seq = useRef(0);
   const load = () => {
+    const id = ++seq.current;
     api
       .tasks(filter || undefined)
-      .then(setTasks)
-      .catch((err: unknown) => setError(errorText(err)));
+      .then((list) => {
+        if (id === seq.current) setTasks(list);
+      })
+      .catch((err: unknown) => {
+        if (id === seq.current) setError(errorText(err));
+      });
   };
 
   useEffect(() => {

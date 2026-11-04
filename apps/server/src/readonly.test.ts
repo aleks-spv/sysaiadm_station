@@ -26,6 +26,12 @@ const read = [
   "Get-Volume | Select-Object DriveLetter, SizeRemaining",
   "Get-ScheduledTaskInfo -TaskName sysadm_upd",
   "Get-Content C:\\Windows\\Temp\\sysadm_upd.log -Tail 50",
+  "sed -n '/error/,/warn/p' /var/log/syslog",
+  "sed -e 's/ *$//' /etc/hosts",
+  "ip -br addr show dev eth0; ip route get 1.1.1.1",
+  "date -Iseconds; date +%s",
+  "rg -n listen /etc/nginx",
+  "sort -k2 -n /etc/hosts",
 ];
 
 const notRead = [
@@ -70,6 +76,29 @@ const notRead = [
   "Get-ChildItem | Remove-Item",
   "Start-ScheduledTask -TaskName sysadm_upd",
   "Unregister-ScheduledTask -TaskName sysadm_upd -Confirm:$false",
+  // code execution and writes hidden in read-only programs
+  'sed -n "1e reboot" /etc/hostname',
+  'sed "1w /etc/cron.d/x" /etc/hostname',
+  "sed '$w /tmp/x' /etc/hostname",
+  "sed 's/a/b/e' /etc/hostname",
+  "sed -n 's/a/b/gw /tmp/x' /etc/hostname",
+  "sed -f /tmp/script /etc/hostname",
+  "rg --pre reboot x /etc/hostname",
+  "sort --compress-program=reboot -S 1 /var/log/syslog",
+  "sort --comp=reboot x",
+  "sort --out=/etc/passwd x",
+  "date --se '2020-01-01'",
+  "journalctl --vac=1M",
+  "ip a a 10.0.0.1/24 dev eth0",
+  "ip l s eth0 down",
+  "ip r d default",
+  "ip -batch /tmp/cmds",
+  "ss -K dst 10.0.0.1",
+  "arp -d 10.0.0.1",
+  "file -C -m /tmp/x",
+  "sensors -s",
+  "dmidecode --dump-bin /tmp/x",
+  "LD_PRELOAD=/tmp/x.so ls",
 ];
 
 describe("isReadOnly", () => {

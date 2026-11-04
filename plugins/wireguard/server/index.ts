@@ -101,7 +101,14 @@ export function createWireguardPlugin(runner: WgRunner = commandRunner(), now: (
   };
 
   const view = (ctx: PluginContext, row: Row, ifaces: Map<string, PeerStatus[]>) => {
-    const conf = confOf(ctx, row);
+    // A config that no longer decrypts shows as this tunnel's error; the other tunnels still list.
+    let conf = "";
+    let decryptError: string | null = null;
+    try {
+      conf = confOf(ctx, row);
+    } catch (err) {
+      decryptError = `конфиг не расшифровался: ${err instanceof Error ? err.message : String(err)}`;
+    }
     const parsed = validateConf(conf);
     const live = ifaces.get(row.id);
     const privateKey = /^\s*PrivateKey\s*=\s*(\S+)/m.exec(conf)?.[1];
@@ -114,7 +121,7 @@ export function createWireguardPlugin(runner: WgRunner = commandRunner(), now: (
       label: row.label,
       autostart: row.autostart === 1,
       desired: row.desired,
-      lastError: row.last_error,
+      lastError: decryptError ?? row.last_error,
       state: live ? ("up" as const) : ("down" as const),
       health: health(live, Math.floor(now() / 1000)),
       publicKey,
@@ -157,7 +164,13 @@ export function createWireguardPlugin(runner: WgRunner = commandRunner(), now: (
       app.get("/tunnels/:id", async (c) => {
         const row = load(ctx, c.req.param("id"));
         if (!row) return c.json({ error: "туннель не найден" }, 404);
-        return c.json({ ...view(ctx, row, (await dump()).ifaces), config: confOf(ctx, row) });
+        let config: string;
+        try {
+          config = confOf(ctx, row);
+        } catch (err) {
+          return c.json({ error: `конфиг не расшифровался: ${err instanceof Error ? err.message : String(err)}` }, 500);
+        }
+        return c.json({ ...view(ctx, row, (await dump()).ifaces), config });
       });
 
       app.post("/tunnels", async (c) => {
@@ -205,13 +218,19 @@ export function createWireguardPlugin(runner: WgRunner = commandRunner(), now: (
       app.delete("/tunnels/:id", async (c) => {
         const id = c.req.param("id");
         if (!load(ctx, id)) return c.json({ error: "туннель не найден" }, 404);
-        if ((await dump()).ifaces.has(id)) {
-          const r = await runner(["down", id]);
-          if (!r.ok) return c.json({ error: `не удалось остановить: ${r.err}` }, 502);
+        if (busy.has(id)) return c.json({ error: "туннель занят другой операцией, повторите" }, 502);
+        busy.add(id);
+        try {
+          if ((await dump()).ifaces.has(id)) {
+            const r = await runner(["down", id]);
+            if (!r.ok) return c.json({ error: `не удалось остановить: ${r.err}` }, 502);
+          }
+          ctx.db.run("DELETE FROM wg_tunnels WHERE id = ?", [id]);
+          ctx.audit(c.get("actor"), "wg_delete", { id });
+          return c.json({ ok: true });
+        } finally {
+          busy.delete(id);
         }
-        ctx.db.run("DELETE FROM wg_tunnels WHERE id = ?", [id]);
-        ctx.audit(c.get("actor"), "wg_delete", { id });
-        return c.json({ ok: true });
       });
 
       for (const action of ["up", "down", "restart"] as const) {
@@ -238,12 +257,24 @@ export function createWireguardPlugin(runner: WgRunner = commandRunner(), now: (
         const wanted = ctx.db.query<{ id: string }, []>("SELECT id FROM wg_tunnels WHERE desired = 'up'").all();
         for (const { id } of wanted) {
           if (ifaces.has(id) || busy.has(id)) continue;
-          const err = await apply(ctx, id, "up");
-          ctx.log(err ? "warn" : "info", err ? `туннель ${id} не поднялся: ${err}` : `туннель ${id} поднят`);
+          try {
+            const err = await apply(ctx, id, "up");
+            ctx.log(err ? "warn" : "info", err ? `туннель ${id} не поднялся: ${err}` : `туннель ${id} поднят`);
+          } catch (err) {
+            ctx.log("error", `туннель ${id}: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
       };
-      void tick();
-      const timer = setInterval(() => void tick(), WATCHDOG_MS);
+      let running = false;
+      const guarded = () => {
+        if (running) return;
+        running = true;
+        tick()
+          .catch((err: unknown) => ctx.log("error", `watchdog: ${err instanceof Error ? err.message : String(err)}`))
+          .finally(() => (running = false));
+      };
+      guarded();
+      const timer = setInterval(guarded, WATCHDOG_MS);
       return () => clearInterval(timer);
     },
   };
