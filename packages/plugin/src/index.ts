@@ -1,11 +1,12 @@
 import type { Plugin } from "@opencode/plugin";
 import { applyWrite, DESCRIPTION as TODO_DESCRIPTION, isOpen, renderForModel, SCHEMA as TODO_SCHEMA, validate, type Todo } from "./todos";
 
-// Tools the model may see. Everything else is removed from the context hook.
+// Tools the model may call. Calls to anything else are refused in the execute.before hook.
 // compress comes from the bundled DCP plugin: it only rewrites the session's own history.
 export const ALLOW = new Set(["remote_exec", "skill", "question", "web_search", "todowrite", "compress"]);
 const SEARCH_REFRESH_MS = 15_000;
-// opencode 2.x puts plugin tools into Code Mode (behind `execute`, which the hook below drops), so the model never saw them.
+const STUB = "Not available in SysAiAdm Station. Never call this tool.";
+// opencode 2.x puts plugin tools into Code Mode (behind `execute`, which the hook below refuses), so the model could not call them.
 const DIRECT = { codemode: false } as const;
 
 type Verdict = {
@@ -68,7 +69,7 @@ export default {
       return data;
     };
 
-    // Whether the admin turned web search on; read by the synchronous context hook below.
+    // Whether the admin turned web search on; read by the synchronous hooks below.
     let searchOn = false;
     const refreshSearch = () =>
       fetch(`${baseUrl}/internal/websearch`, { headers })
@@ -149,8 +150,17 @@ export default {
       });
     });
 
+    // Built-in tools stay in the model request (Zen refuses free models when the tool list is cut, 2026-11-13),
+    // so the whitelist is enforced on the call instead; the base policies deny shell/edit/read/... as well.
+    await ctx.tool.hook("execute.before", (e) => {
+      if (!ALLOW.has(e.tool) || (e.tool === "web_search" && !searchOn))
+        throw new Error(`Tool "${e.tool}" is not available in SysAiAdm Station. Use only: ${[...ALLOW].join(", ")}.`);
+    });
+
     await ctx.session.hook("context", (e) => {
-      for (const key of Object.keys(e.tools)) if (!ALLOW.has(key) || (key === "web_search" && !searchOn)) delete e.tools[key];
+      // Names stay for Zen; descriptions and schemas shrink to a stub so the model spends no context on them.
+      for (const key of Object.keys(e.tools))
+        if (!ALLOW.has(key) || (key === "web_search" && !searchOn)) e.tools[key] = { description: STUB, input: { type: "object", properties: {} } };
       // After a compaction the model no longer sees its last todowrite call: give the open plan back.
       const list = todos.get(e.sessionID);
       if (!list || !isOpen(list)) return;

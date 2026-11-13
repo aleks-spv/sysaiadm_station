@@ -153,7 +153,7 @@ export function createInternalApp(deps: InternalDeps): Hono {
     await next();
   });
 
-  // The plugin drops web_search from the model's tools while this says false.
+  // The plugin stubs web_search and refuses its calls while this says false.
   app.get("/internal/websearch", (c) => c.json({ enabled: deps.webSearch?.enabled() ?? false }));
 
   app.post("/internal/websearch", async (c) => {
